@@ -1,0 +1,13 @@
+# Core dependencies
+aiogram
+gspread-asyncio
+python-dotenv
+aiohttp 
+
+# Architectural dependencies
+pydantic 
+pymorphy3 # <--- ИСПОЛЬЗУЕМ ФОРК
+
+# Testing dependencies
+pytest
+pytest-asyncio
