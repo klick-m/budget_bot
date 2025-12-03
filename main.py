@@ -16,6 +16,7 @@ from handlers.transactions import (
     process_amount_entry,
     process_comment_entry,
     process_comment_skip,
+    cancel_check,
     AllowedUsersFilter,
     Transaction 
 )
@@ -49,6 +50,14 @@ def register_handlers(dp: Dispatcher):
     
     # FSM для чеков
     dp.callback_query.register(process_category_choice_after_check, F.data.startswith("checkcat_"), Transaction.choosing_category_after_check, AllowedUsersFilter())
+    
+    # Подтверждение и отмена чека
+    dp.callback_query.register(process_comment_skip, F.data == "confirm_and_record", Transaction.confirming_check, AllowedUsersFilter())
+    dp.callback_query.register(cancel_check, F.data == "cancel_check", Transaction.confirming_check, AllowedUsersFilter())
+    
+    # Подтверждение автоматически распознанного чека
+    dp.callback_query.register(process_comment_skip, F.data == "comment_none", Transaction.confirming_auto_check, AllowedUsersFilter())
+    dp.callback_query.register(cancel_check, F.data == "cancel_check", Transaction.confirming_auto_check, AllowedUsersFilter())
     
     dp.message.register(process_amount_entry, Transaction.entering_amount, F.text, AllowedUsersFilter())
     dp.message.register(process_comment_entry, Transaction.entering_comment, F.text, AllowedUsersFilter())

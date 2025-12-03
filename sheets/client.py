@@ -2,7 +2,8 @@
 import asyncio
 import gspread
 from datetime import datetime
-from typing import List
+from typing import List, Dict, Optional
+from functools import lru_cache
 
 # Импортируем переменные из нашего нового модуля конфигурации
 from config import (
@@ -11,7 +12,8 @@ from config import (
     DATA_SHEET_NAME, 
     CATEGORIES_SHEET_NAME, 
     CATEGORY_STORAGE, 
-    logger
+    logger,
+    SHEET_WRITE_TIMEOUT
 )
 # Импортируем наши Pydantic модели
 from models.transaction import TransactionData
@@ -19,19 +21,60 @@ from models.transaction import TransactionData
 from utils.exceptions import SheetConnectionError, SheetWriteError
 
 
+# --- КЕШИРОВАНИЕ КЛИЕНТОВ И РАБОЧИХ ЛИСТОВ ---
+class GoogleSheetsCache:
+    """Кеширует подключения к Google Sheets для избежания переподключений."""
+    def __init__(self):
+        self._gc = None
+        self._sheets: Dict[str, gspread.Worksheet] = {}
+        self._last_gc_time = None
+        self._gc_timeout = 3600  # Переподключаться каждый час
+    
+    async def get_client(self):
+        """Получает (или создаёт) кешированный Google Sheets клиент."""
+        now = datetime.now()
+        
+        # Переподключаемся если прошло > часа или клиент не инициализирован
+        if self._gc is None or (
+            self._last_gc_time and 
+            (now - self._last_gc_time).total_seconds() > self._gc_timeout
+        ):
+            try:
+                self._gc = await asyncio.to_thread(gspread.service_account, filename=SERVICE_KEY)
+                self._last_gc_time = now
+                self._sheets.clear()  # Очищаем кеш листов при переподключении
+                logger.info("✅ Переподключение к Google Sheets выполнено успешно")
+            except Exception as e:
+                logger.error(f"❌ Критическая ошибка подключения к Google Sheets: {e}")
+                self._gc = None
+                raise SheetConnectionError(f"Не удалось подключиться к Google Sheets: {e}")
+        
+        return self._gc
+    
+    async def get_worksheet(self, sheet_name: str) -> gspread.Worksheet:
+        """Получает кешированный рабочий лист."""
+        if sheet_name not in self._sheets:
+            try:
+                gc = await self.get_client()
+                sh = await asyncio.to_thread(gc.open_by_url, GOOGLE_SHEET_URL)
+                ws = await asyncio.to_thread(sh.worksheet, sheet_name)
+                self._sheets[sheet_name] = ws
+            except Exception as e:
+                logger.error(f"❌ Ошибка получения листа '{sheet_name}': {e}")
+                raise SheetConnectionError(f"Не удалось подключиться к листу {sheet_name}.")
+        
+        return self._sheets[sheet_name]
+
+# Глобальный кеш (один на приложение)
+_sheets_cache = GoogleSheetsCache()
+
+
 async def get_google_sheet_client(sheet_name: str) -> gspread.Worksheet:
-    """Устанавливает асинхронное соединение с листом Google Sheets."""
+    """Устанавливает асинхронное соединение с листом Google Sheets (с кешированием)."""
     try:
-        # SERVICE_KEY берется из config.py, который прочитал его из .env
-        gc = await asyncio.to_thread(gspread.service_account, filename=SERVICE_KEY) 
-        # GOOGLE_SHEET_URL берется из config.py
-        sh = await asyncio.to_thread(gc.open_by_url, GOOGLE_SHEET_URL)
-        # sheet_name - это либо 'Транзакции', либо 'Categories' (из config.py)
-        ws = await asyncio.to_thread(sh.worksheet, sheet_name)
-        return ws
-    except Exception as e:
-        logger.error(f"❌ Ошибка подключения к Google Sheets (лист {sheet_name}): {e}")
-        raise SheetConnectionError(f"Не удалось подключиться к листу {sheet_name}.")
+        return await _sheets_cache.get_worksheet(sheet_name)
+    except SheetConnectionError:
+        raise
 
 
 async def load_categories_from_sheet() -> bool:

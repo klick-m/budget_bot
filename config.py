@@ -3,8 +3,12 @@ import os
 import logging
 from dotenv import load_dotenv
 
-# Инициализация логгера
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Инициализация логгера с правильной кодировкой UTF-8
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    encoding='utf-8'  # Явно указываем UTF-8
+)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -26,7 +30,7 @@ CHECK_API_URL = "https://proverkacheka.com/api/v1/check/get"
 CHECK_API_TIMEOUT = 25 
 
 # --- Тайм-ауты и ограничения ---
-SHEET_WRITE_TIMEOUT = 15 
+SHEET_WRITE_TIMEOUT = 15  # Таймаут для операций с Google Sheets
 
 # --- ХРАНИЛИЩЕ КАТЕГОРИЙ (замена глобальных переменных) ---
 class CategoryStorage:

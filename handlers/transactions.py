@@ -3,15 +3,16 @@ import asyncio
 import re
 import aiohttp
 from datetime import datetime
-from aiogram import Dispatcher, Bot, types, F
-from aiogram.filters import BaseFilter
+from aiogram import Dispatcher, Bot, types
+from aiogram.filters import BaseFilter, StateFilter
+from aiogram.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton 
+from aiogram import F 
 
 # Импорт из нашей структуры
 from config import ALLOWED_USER_IDS, CATEGORY_STORAGE, logger, SHEET_WRITE_TIMEOUT
-from sheets.client import write_transaction, add_keywords_to_sheet
+from sheets.client import write_transaction, add_keywords_to_sheet, load_categories_from_sheet
 from models.transaction import TransactionData, CheckData
 from utils.exceptions import SheetWriteError, CheckApiTimeout, CheckApiRecognitionError
 from utils.service_wrappers import safe_answer, edit_or_send
@@ -32,7 +33,9 @@ class AllowedUsersFilter(BaseFilter):
 class Transaction(StatesGroup):
     choosing_type = State()
     choosing_category = State()
-    choosing_category_after_check = State() 
+    choosing_category_after_check = State()
+    confirming_check = State()  # Подтверждение чека после выбора категории вручную
+    confirming_auto_check = State()  # Подтверждение автоматически распознанного чека
     entering_amount = State()
     entering_comment = State()
 
@@ -172,6 +175,9 @@ async def handle_photo(message: types.Message, state: FSMContext):
 
     status_msg = await message.answer("⏳ **Чек получен.** Отправка изображения в API Proverkacheka.com...")
     
+    # 0. Перезагружаем категории из Google Sheets чтобы использовать актуальные ключевые слова
+    await load_categories_from_sheet()
+    
     file_info = await message.bot.get_file(file_object.file_id)
     file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_info.file_path}"
     
@@ -243,11 +249,14 @@ async def handle_photo(message: types.Message, state: FSMContext):
 
     else:
         # --- ЛОГИКА 2: КАТЕГОРИЯ ОПРЕДЕЛЕНА ---
-        await state.set_state(Transaction.entering_comment) 
+        await state.set_state(Transaction.confirming_auto_check)
 
         keyboard = types.InlineKeyboardMarkup(
             inline_keyboard=[
-                [types.InlineKeyboardButton(text="✅ Подтвердить и Записать", callback_data="comment_none")]
+                [
+                    types.InlineKeyboardButton(text="✅ Подтвердить и Записать", callback_data="comment_none"),
+                    types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_check")
+                ]
             ]
         )
         
@@ -260,8 +269,8 @@ async def handle_photo(message: types.Message, state: FSMContext):
                    f"{check_date_preview}"
                    f"Продавец: *{parsed_data.retailer_name}*\n" 
                    f"Оплата: *{parsed_data.payment_info}*\n\n" 
-                   f"**Комментарий (по умолчанию):**\n• {default_comment_preview}\n\n"
-                   f"Нажмите **Подтвердить**, чтобы записать, или введите другой комментарий.")
+                   f"**Позиции в чеке:**\n• {default_comment_preview}\n\n"
+                   f"Нажмите **Подтвердить**, чтобы записать, или **Отменить**.")
                    
         await edit_or_send(message.bot, status_msg, summary, reply_markup=keyboard, parse_mode="Markdown")
 
@@ -329,42 +338,33 @@ async def process_category_choice_after_check(callback: types.CallbackQuery, sta
     new_category = callback.data.split('_')[1]
     data = await state.get_data()
     
-    retailer_name = data.get('retailer_name', 'Неизвестный Продавец')
-    items_list_str = data.get('items_list', '')
-
-    keywords_to_learn = extract_learnable_keywords(retailer_name, items_list_str)
-    
-    # 1. Отправляем статус о сохранении ключевых слов
-    status_msg = await edit_or_send(
-        bot,
-        callback.message,
-        text=f"⏳ Категория **{new_category}** выбрана. Запоминаю {len(keywords_to_learn)} ключевых слов ({keywords_to_learn[0]}...) для будущих чеков...",
-        parse_mode="Markdown"
-    )
-
-    # 2. Записываем ключевые слова в Google Sheets
-    await add_keywords_to_sheet(new_category, keywords_to_learn)
-    
-    # 3. Обновляем FSM и переходим к комментарию
+    # Сохраняем новую категорию и переходим в состояние подтверждения
     await state.update_data(category=new_category)
-    await state.set_state(Transaction.entering_comment)
+    await state.set_state(Transaction.confirming_check)
+    
+    # Показываем сводку и кнопки подтверждения/отмены БЕЗ добавления ключевых слов
+    default_comment_preview = data['comment'].replace('|', '\n• ')
+    transaction_dt_str = data.get('transaction_dt').strftime('%d.%m.%Y %H:%M') if data.get('transaction_dt') else 'сейчас'
+    
+    summary = (f"🔍 **Чек распознан и категоризирован!**\n\n"
+               f"Тип: **{data.get('type', 'Расход')}**\n"
+               f"Категория: **{new_category}** (вручную выбрана)\n"
+               f"Сумма: **{data['amount']}** руб.\n"
+               f"Дата: **{transaction_dt_str}**\n"
+               f"Продавец: *{data.get('retailer_name', 'Неизвестный')}*\n\n"
+               f"**Позиции в чеке:**\n• {default_comment_preview}\n\n"
+               f"✅ Готово к записи?")
     
     keyboard = types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [types.InlineKeyboardButton(text="✅ Подтвердить и Записать", callback_data="comment_none")]
+            [
+                types.InlineKeyboardButton(text="✅ Подтвердить и Записать", callback_data="confirm_and_record"),
+                types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_check")
+            ]
         ]
     )
     
-    # В тексте сообщения показываем, что будет использовано в качестве комментария:
-    default_comment_preview = data['comment'].replace('|', '\n• ')
-    
-    summary = (f"✅ Категория **{new_category}** запомнена для будущих чеков.\n"
-               f"Сумма: **{data['amount']}** руб.\n\n"
-               f"**Комментарий (по умолчанию):**\n• {default_comment_preview}\n\n"
-               f"Нажмите **Подтвердить**, чтобы записать, или введите комментарий.")
-               
-    # 4. Выводим финальное подтверждение перед записью
-    await edit_or_send(bot, status_msg, summary, reply_markup=keyboard, parse_mode="Markdown")
+    await edit_or_send(bot, callback.message, summary, reply_markup=keyboard, parse_mode="Markdown")
 
 
 async def process_amount_entry(message: types.Message, state: FSMContext, bot: Bot):
@@ -406,13 +406,71 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
     data = await state.get_data()
     if not data.get('comment'):
         await state.update_data(comment="") 
+    
+    # Проверяем, находимся ли мы в состоянии подтверждения чека (нужно добавить ключевые слова)
+    current_state = await state.get_state()
+    
+    if current_state == Transaction.confirming_check:
+        # Это подтверждение после выбора категории для чека - добавляем ключевые слова
+        new_category = data.get('category')
+        retailer_name = data.get('retailer_name', 'Неизвестный Продавец')
+        items_list_str = data.get('items_list', '')
+        keywords_to_learn = extract_learnable_keywords(retailer_name, items_list_str)
         
-    # Редактируем сообщение, чтобы показать статус загрузки
+        # Показываем статус о сохранении ключевых слов
+        status_msg = await edit_or_send(
+            bot,
+            callback.message,
+            text=f"⏳ Категория **{new_category}** подтверждена. Запоминаю {len(keywords_to_learn)} ключевых слов для будущих чеков...",
+            parse_mode="Markdown"
+        )
+        
+        # Записываем ключевые слова в Google Sheets
+        await add_keywords_to_sheet(new_category, keywords_to_learn)
+        
+        # Теперь записываем саму транзакцию
+        await edit_or_send(
+            bot,
+            status_msg,
+            text="⏳ **Записываю транзакцию...** Ожидайте.", 
+            parse_mode="Markdown"
+        )
+        
+        await finalize_transaction(status_msg, state, bot)
+        
+    elif current_state == Transaction.confirming_auto_check:
+        # Это подтверждение автоматически распознанного чека - не добавляем новые ключевые слова
+        await edit_or_send(
+            bot,
+            callback.message,
+            text="⏳ **Записываю транзакцию...** Ожидайте.", 
+            parse_mode="Markdown"
+        )
+        
+        await finalize_transaction(callback.message, state, bot)
+    else:
+        # Обычное пропускание комментария
+        await edit_or_send(
+            bot,
+            callback.message,
+            text="⏳ **Записываю транзакцию...** Ожидайте.", 
+            parse_mode="Markdown"
+        )
+        
+        await finalize_transaction(callback.message, state, bot)
+
+
+async def cancel_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Отменяет ввод чека и возвращает на начало."""
+    
+    await safe_answer(callback)
+    
+    await state.clear()
+    
+    # Редактируем текущее сообщение
     await edit_or_send(
         bot,
         callback.message,
-        text="⏳ **Записываю транзакцию...** Ожидайте.", 
+        text="❌ **Чек отменен.** Выберите действие на клавиатуре ниже.",
         parse_mode="Markdown"
     )
-    
-    await finalize_transaction(callback.message, state, bot)
