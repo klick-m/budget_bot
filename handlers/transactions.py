@@ -256,6 +256,9 @@ async def handle_photo(message: types.Message, state: FSMContext):
                 [
                     types.InlineKeyboardButton(text="✅ Подтвердить и Записать", callback_data="comment_none"),
                     types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_check")
+                ],
+                [
+                    types.InlineKeyboardButton(text="✏️ Изменить категорию", callback_data="edit_category")
                 ]
             ]
         )
@@ -365,6 +368,35 @@ async def process_category_choice_after_check(callback: types.CallbackQuery, sta
     )
     
     await edit_or_send(bot, callback.message, summary, reply_markup=keyboard, parse_mode="Markdown")
+
+
+async def process_edit_category(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Переводит пользователя в режим выбора категории для авто-распознанного чека."""
+    
+    await safe_answer(callback)
+    
+    data = await state.get_data()
+    transaction_type = data.get('type', 'Расход')
+    category_list = CATEGORY_STORAGE.expense if transaction_type == "Расход" else CATEGORY_STORAGE.income
+    
+    # Переходим в состояние выбора категории
+    await state.set_state(Transaction.choosing_category_after_check)
+    
+    buttons = [
+        types.InlineKeyboardButton(text=cat, callback_data=f"checkcat_{cat}")
+        for cat in category_list
+    ]
+    keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    )
+    
+    await edit_or_send(
+        bot,
+        callback.message,
+        text=f"Выберите правильную категорию для этого чека:",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
 
 
 async def process_amount_entry(message: types.Message, state: FSMContext, bot: Bot):

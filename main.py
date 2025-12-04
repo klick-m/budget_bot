@@ -13,6 +13,7 @@ from handlers.transactions import (
     process_type_choice,
     process_category_choice,
     process_category_choice_after_check,
+    process_edit_category,
     process_amount_entry,
     process_comment_entry,
     process_comment_skip,
@@ -58,6 +59,7 @@ def register_handlers(dp: Dispatcher):
     # Подтверждение автоматически распознанного чека
     dp.callback_query.register(process_comment_skip, F.data == "comment_none", Transaction.confirming_auto_check, AllowedUsersFilter())
     dp.callback_query.register(cancel_check, F.data == "cancel_check", Transaction.confirming_auto_check, AllowedUsersFilter())
+    dp.callback_query.register(process_edit_category, F.data == "edit_category", Transaction.confirming_auto_check, AllowedUsersFilter())
     
     dp.message.register(process_amount_entry, Transaction.entering_amount, F.text, AllowedUsersFilter())
     dp.message.register(process_comment_entry, Transaction.entering_comment, F.text, AllowedUsersFilter())
