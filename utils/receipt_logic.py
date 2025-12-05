@@ -16,15 +16,18 @@ def map_category_by_keywords(search_string: str) -> str:
     
     # Ищем совпадения по ключевым словам в хранилище CATEGORY_STORAGE
     for category, keywords in CATEGORY_STORAGE.keywords.items():
-        if category not in CATEGORY_STORAGE.expense:
-             continue # Пропускаем, если категория каким-то образом не является расходной
-
-        for keyword in keywords:
-            if keyword in normalized_comment:
-                return category # Возвращаем первое совпадение
+        # Проверяем, что категория существует в списке расходов
+        if category in CATEGORY_STORAGE.expense:
+            for keyword in keywords:
+                if keyword in normalized_comment:
+                    return category # Возвращаем первое совпадение
                 
     # Если совпадений нет, возвращаем последнюю категорию (обычно "Прочее Расход")
-    return CATEGORY_STORAGE.expense[-1] if CATEGORY_STORAGE.expense else "Прочее Расход"
+    if CATEGORY_STORAGE.expense:
+        return CATEGORY_STORAGE.expense[-1]
+    else:
+        # Если список расходов пуст, возвращаем стандартную категорию
+        return "Прочее Расход"
 
 
 def extract_learnable_keywords(retailer_name: str, items_list_str: str) -> List[str]:
@@ -35,17 +38,23 @@ def extract_learnable_keywords(retailer_name: str, items_list_str: str) -> List[
     item_names = [name.strip() for name in items_list_str.split('|') if name.strip()]
 
     # Список незначащих слов для фильтрации
-    stop_words = {'руб', 'шт', 'скидка', 'скидки', 'акция', 'товар', 'услуга', 'чек', 'касса', 'продажа', 'возврат', 'ру', 'руc', 'рф', 'ооо', 'ип'} 
+    stop_words = {
+        'руб', 'шт', 'скидка', 'скидки', 'акция', 'товар', 'услуга', 'чек', 'касса',
+        'продажа', 'возврат', 'ру', 'руc', 'рф', 'ооо', 'ип', 'оао', 'пао', 'ао',
+        'безнал', 'нал', 'оплата', 'цена', 'итого', 'наименование', 'артикул', 'код'
+    }
     
     for name in item_names:
-        cleaned_name = re.sub(r'[\d\.\,\/\-\(\)\*\"]', ' ', name.lower()) 
+        cleaned_name = re.sub(r'[\d\.\,\/\-\(\)\*\"]', ' ', name.lower())
         words = cleaned_name.split()
         
         for word in words:
             word = word.strip()
-            # Фильтруем короткие (меньше 4 символов) и стоп-слова
-            if len(word) > 3 and word not in stop_words: 
-                keywords.append(word)
+            # Фильтруем короткие (меньше 3 символов) и стоп-слова
+            if len(word) > 2 and word not in stop_words and not word.isdigit():
+                # Проверяем, что слово содержит хотя бы одну букву
+                if any(c.isalpha() for c in word):
+                    keywords.append(word)
 
     return list(set([k.lower() for k in keywords]))
 
@@ -89,6 +98,12 @@ async def parse_check_from_api(image_data: bytes) -> CheckData:
                         total_sum_kopecks = check_data.get('totalSum', 0) 
                         amount = round(total_sum_kopecks / 100, 2)
                         
+                        # Проверяем, что сумма положительная и не превышает разумный лимит
+                        if amount <= 0:
+                            raise CheckApiRecognitionError('Сумма в чеке должна быть положительной.')
+                        if amount > 100000:  # Ограничение максимальной суммы
+                            raise CheckApiRecognitionError('Сумма в чеке слишком велика.')
+                        
                         items = check_data.get('items', [])
                         item_names = [item['name'] for item in items]
                         items_list_str = " | ".join(item_names)
@@ -107,10 +122,10 @@ async def parse_check_from_api(image_data: bytes) -> CheckData:
                         # Создаем и возвращаем Pydantic модель
                         return CheckData(
                             category=auto_category,
-                            amount=amount,                    
-                            comment=items_list_str,                  
-                            retailer_name=retailer,           
-                            items_list=items_list_str,        
+                            amount=amount,
+                            comment=items_list_str,
+                            retailer_name=retailer,
+                            items_list=items_list_str,
                             payment_info=payment_info,
                             check_datetime_str=check_data.get('dateTime')
                         )

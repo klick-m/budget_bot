@@ -5,11 +5,33 @@ from dotenv import load_dotenv
 
 # Инициализация логгера с правильной кодировкой UTF-8
 logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    encoding='utf-8'  # Явно указываем UTF-8
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Устанавливаем обработчик с явной кодировкой UTF-8 для Windows
+import sys
+import io
+
+# Проверяем, является ли stdout консолью Windows
+if sys.stdout.encoding != 'utf-8':
+    # Если нет, то устанавливаем кодировку UTF-8 для вывода
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    else:
+        # Альтернативный способ для старых версий Python
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+# Также устанавливаем кодировку для stderr
+if sys.stderr.encoding != 'utf-8':
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+    else:
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+# Устанавливаем переменную окружения для правильной обработки UTF-8 в Windows
+os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 load_dotenv()
 

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # handlers/transactions.py
 import asyncio
 import re
@@ -8,7 +9,7 @@ from aiogram.filters import BaseFilter, StateFilter
 from aiogram.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram import F 
+from aiogram import F
 
 # Импорт из нашей структуры
 from config import ALLOWED_USER_IDS, CATEGORY_STORAGE, logger, SHEET_WRITE_TIMEOUT
@@ -17,6 +18,7 @@ from models.transaction import TransactionData, CheckData
 from utils.exceptions import SheetWriteError, CheckApiTimeout, CheckApiRecognitionError
 from utils.service_wrappers import safe_answer, edit_or_send
 from utils.receipt_logic import parse_check_from_api, extract_learnable_keywords
+from utils.category_classifier import classifier
 
 
 # --- A. ФИЛЬТР И FSM ---
@@ -81,8 +83,18 @@ async def finalize_transaction(message_to_edit: types.Message, state: FSMContext
 
     # 2. Запись в Google Sheets с таймаутом
     try:
+        # Обучаем классификатор на новой транзакции перед записью
+        transactions_for_training = [transaction]
+        
+        # Пытаемся получить историю транзакций для обучения
+        # (в реальном приложении здесь нужно будет получить исторические данные из Google Sheets)
+        # Пока используем только текущую транзакцию, но в будущем можно расширить
+        
+        # Обновляем модель классификатора
+        classifier.train(transactions_for_training)
+        
         async with asyncio.timeout(SHEET_WRITE_TIMEOUT):
-            await write_transaction(transaction) 
+            await write_transaction(transaction)
             
         transaction_dt_str = transaction.transaction_dt.strftime('%d.%m.%Y %H:%M')
         
@@ -169,9 +181,20 @@ async def handle_photo(message: types.Message, state: FSMContext):
     await state.clear()
     
     # Определяем файл для скачивания
-    if message.photo: file_object = message.photo[-1] 
-    elif message.document and message.document.mime_type and message.document.mime_type.startswith('image'): file_object = message.document
-    else: return 
+    if message.photo:
+        # Проверяем размер фото (ограничим максимальный размер файла в 5 МБ)
+        if message.photo[-1].file_size and message.photo[-1].file_size > 5 * 1024 * 1024:
+            await message.answer("❌ Размер изображения слишком большой. Пожалуйста, отправьте фото меньше 5 МБ.")
+            return
+        file_object = message.photo[-1]
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith('image'):
+        # Проверяем размер документа
+        if message.document.file_size and message.document.file_size > 5 * 1024 * 1024:
+            await message.answer("❌ Размер изображения слишком большой. Пожалуйста, отправьте фото меньше 5 МБ.")
+            return
+        file_object = message.document
+    else:
+        return
 
     status_msg = await message.answer("⏳ **Чек получен.** Отправка изображения в API Proverkacheka.com...")
     
@@ -224,7 +247,24 @@ async def handle_photo(message: types.Message, state: FSMContext):
     fallback_category = CATEGORY_STORAGE.expense[-1] if CATEGORY_STORAGE.expense else "Прочее Расход"
     # -----------------------------------
 
-    if parsed_data.category == fallback_category:
+    # Создаем TransactionData из полученных данных для использования в классификаторе
+    temp_transaction = TransactionData(
+        type=parsed_data.type,
+        category=parsed_data.category,
+        amount=parsed_data.amount,
+        comment=parsed_data.comment,
+        username=message.from_user.username or message.from_user.full_name,
+        retailer_name=parsed_data.retailer_name,
+        items_list=parsed_data.items_list,
+        payment_info=parsed_data.payment_info,
+        transaction_dt=parsed_data.transaction_datetime
+    )
+    
+    # Применяем улучшенную классификацию
+    predicted_category, confidence = classifier.predict_category(temp_transaction)
+    
+    # Вместо предложения новой категории, используем только существующие категории
+    if parsed_data.category == fallback_category or confidence < 0.5:
         
         # --- ЛОГИКА 1: КАТЕГОРИЯ НЕ ОПРЕДЕЛЕНА, ЗАПРАШИВАЕМ РУЧНОЙ ВВОД (С ОБУЧЕНИЕМ) ---
         await state.set_state(Transaction.choosing_category_after_check)
@@ -241,7 +281,7 @@ async def handle_photo(message: types.Message, state: FSMContext):
         summary = (f"🔍 **Чек распознан, но категория не определена!**\n\n"
                    f"Сумма: **{parsed_data.amount}** руб.\n"
                    f"{check_date_preview}"
-                   f"Продавец: *{parsed_data.retailer_name}*\n\n" 
+                   f"Продавец: *{parsed_data.retailer_name}*\n\n"
                    f"{items_preview}\n\n"
                    f"⚠️ **Внимание:** Выберите категорию, чтобы бот **запомнил** продавца и товары для будущих чеков.")
                    
@@ -249,6 +289,10 @@ async def handle_photo(message: types.Message, state: FSMContext):
 
     else:
         # --- ЛОГИКА 2: КАТЕГОРИЯ ОПРЕДЕЛЕНА ---
+        # Обновляем категорию на основе предсказания улучшенного классификатора
+        if confidence > 0.7:  # Если уверенность высока, используем предсказание
+            parsed_data.category = predicted_category
+        
         await state.set_state(Transaction.confirming_auto_check)
 
         keyboard = types.InlineKeyboardMarkup(
@@ -267,11 +311,11 @@ async def handle_photo(message: types.Message, state: FSMContext):
         
         summary = (f"🔍 **Чек распознан и категоризирован!**\n\n"
                    f"Тип: **{parsed_data.type}**\n"
-                   f"Категория: **{parsed_data.category}** (Авто)\n"
+                   f"Категория: **{parsed_data.category}** (Авто, уверенность: {confidence:.2f})\n"
                    f"Сумма: **{parsed_data.amount}** руб.\n"
                    f"{check_date_preview}"
-                   f"Продавец: *{parsed_data.retailer_name}*\n" 
-                   f"Оплата: *{parsed_data.payment_info}*\n\n" 
+                   f"Продавец: *{parsed_data.retailer_name}*\n"
+                   f"Оплата: *{parsed_data.payment_info}*\n\n"
                    f"**Позиции в чеке:**\n• {default_comment_preview}\n\n"
                    f"Нажмите **Подтвердить**, чтобы записать, или **Отменить**.")
                    
@@ -402,9 +446,12 @@ async def process_edit_category(callback: types.CallbackQuery, state: FSMContext
 async def process_amount_entry(message: types.Message, state: FSMContext, bot: Bot):
     
     try:
-        amount = round(float(message.text.replace(',', '.')), 2) 
+        amount = round(float(message.text.replace(',', '.')), 2)
         if amount <= 0:
-            raise ValueError
+            raise ValueError("Сумма должна быть положительной")
+        if amount > 100000:  # Ограничение максимальной суммы
+            await message.answer("❌ Сумма слишком велика. Пожалуйста, введите сумму до 100000.")
+            return
     except ValueError:
         await message.answer("🚫 Сумма должна быть положительным числом. Попробуйте снова:")
         return
@@ -460,22 +507,53 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
         # Записываем ключевые слова в Google Sheets
         await add_keywords_to_sheet(new_category, keywords_to_learn)
         
+        # Обучаем классификатор на новой транзакции
+        temp_transaction = TransactionData(
+            type=data.get('type', 'Расход'),
+            category=new_category,
+            amount=data.get('amount'),
+            comment=data.get('comment', ''),
+            username=callback.from_user.username or callback.from_user.full_name,
+            retailer_name=retailer_name,
+            items_list=items_list_str,
+            payment_info=data.get('payment_info', ''),
+            transaction_dt=data.get('transaction_dt', datetime.now())
+        )
+        
+        # Обновляем модель классификатора
+        classifier.train([temp_transaction])
+        
         # Теперь записываем саму транзакцию
         await edit_or_send(
             bot,
             status_msg,
-            text="⏳ **Записываю транзакцию...** Ожидайте.", 
+            text="⏳ **Записываю транзакцию...** Ожидайте.",
             parse_mode="Markdown"
         )
         
         await finalize_transaction(status_msg, state, bot)
         
     elif current_state == Transaction.confirming_auto_check:
-        # Это подтверждение автоматически распознанного чека - не добавляем новые ключевые слова
+        # Это подтверждение автоматически распознанного чека - обучаем классификатор
+        temp_transaction = TransactionData(
+            type=data.get('type', 'Расход'),
+            category=data.get('category'),
+            amount=data.get('amount'),
+            comment=data.get('comment', ''),
+            username=callback.from_user.username or callback.from_user.full_name,
+            retailer_name=data.get('retailer_name', ''),
+            items_list=data.get('items_list', ''),
+            payment_info=data.get('payment_info', ''),
+            transaction_dt=data.get('transaction_dt', datetime.now())
+        )
+        
+        # Обновляем модель классификатора
+        classifier.train([temp_transaction])
+        
         await edit_or_send(
             bot,
             callback.message,
-            text="⏳ **Записываю транзакцию...** Ожидайте.", 
+            text="⏳ **Записываю транзакцию...** Ожидайте.",
             parse_mode="Markdown"
         )
         
@@ -485,7 +563,7 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
         await edit_or_send(
             bot,
             callback.message,
-            text="⏳ **Записываю транзакцию...** Ожидайте.", 
+            text="⏳ **Записываю транзакцию...** Ожидайте.",
             parse_mode="Markdown"
         )
         

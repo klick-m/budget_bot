@@ -79,10 +79,18 @@ async def get_google_sheet_client(sheet_name: str) -> gspread.Worksheet:
 
 async def load_categories_from_sheet() -> bool:
     """Загружает списки категорий и ключевые слова в CATEGORY_STORAGE."""
-    try:
-        ws = await get_google_sheet_client(CATEGORIES_SHEET_NAME)
-    except SheetConnectionError:
-        return False
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            ws = await get_google_sheet_client(CATEGORIES_SHEET_NAME)
+            break
+        except SheetConnectionError:
+            retry_count += 1
+            if retry_count >= max_retries:
+                return False
+            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
 
     try:
         # Выполняем синхронную операцию в отдельном потоке
@@ -91,12 +99,12 @@ async def load_categories_from_sheet() -> bool:
         # Очищаем хранилище перед обновлением
         CATEGORY_STORAGE.expense.clear()
         CATEGORY_STORAGE.income.clear()
-        CATEGORY_STORAGE.keywords.clear() 
+        CATEGORY_STORAGE.keywords.clear()
 
         for row in all_values[1:]: # Пропускаем заголовок
-            expense_cat = row[0].strip() if len(row) > 0 else ''     
-            keywords_str = row[1].strip() if len(row) > 1 else ''   
-            income_cat = row[2].strip() if len(row) > 2 else ''    
+            expense_cat = row[0].strip() if len(row) > 0 else ''
+            keywords_str = row[1].strip() if len(row) > 1 else ''
+            income_cat = row[2].strip() if len(row) > 2 else ''
             
             if expense_cat:
                 CATEGORY_STORAGE.expense.append(expense_cat)
@@ -104,7 +112,7 @@ async def load_categories_from_sheet() -> bool:
                 if keywords_str:
                     keywords_list = [k.strip().lower() for k in keywords_str.split(',') if k.strip()]
                     if keywords_list:
-                        CATEGORY_STORAGE.keywords[expense_cat] = keywords_list 
+                        CATEGORY_STORAGE.keywords[expense_cat] = keywords_list
                         
             if income_cat:
                 CATEGORY_STORAGE.income.append(income_cat)
@@ -123,10 +131,18 @@ async def write_transaction(transaction: TransactionData):
     """
     Асинхронно записывает транзакцию в лист 'Транзакции', используя Pydantic модель.
     """
-    try:
-        ws = await get_google_sheet_client(DATA_SHEET_NAME)
-    except SheetConnectionError as e:
-        raise SheetWriteError(e)
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            ws = await get_google_sheet_client(DATA_SHEET_NAME)
+            break
+        except SheetConnectionError as e:
+            retry_count += 1
+            if retry_count >= max_retries:
+                raise SheetWriteError(f"Не удалось подключиться к Google Sheets после {max_retries} попыток: {e}")
+            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
 
     # Преобразуем Pydantic модель в список для записи
     row = [
@@ -142,12 +158,18 @@ async def write_transaction(transaction: TransactionData):
         transaction.payment_info
     ]
     
-    try:
-        # Используем append_rows вместо append_row - это быстрее! (Пункт 9 в рекомендациях)
-        await asyncio.to_thread(ws.append_rows, [row])
-    except Exception as e:
-        logger.error(f"❌ Ошибка записи транзакции: {e}")
-        raise SheetWriteError(f"Не удалось записать транзакцию в Sheets: {e}")
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            # Используем append_rows вместо append_row - это быстрее! (Пункт 9 в рекомендациях)
+            await asyncio.to_thread(ws.append_rows, [row])
+            break
+        except Exception as e:
+            retry_count += 1
+            if retry_count >= max_retries:
+                logger.error(f"❌ Ошибка записи транзакции: {e}")
+                raise SheetWriteError(f"Не удалось записать транзакцию в Sheets: {e}")
+            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
 
 
 async def add_keywords_to_sheet(category: str, new_keywords: List[str]) -> bool:
@@ -155,20 +177,36 @@ async def add_keywords_to_sheet(category: str, new_keywords: List[str]) -> bool:
     Добавляет список новых ключевых слов к указанной категории в листе Categories.
     """
     if not new_keywords:
-        return True 
+        return True
 
     normalized_keywords_to_add = list(set([k.strip().lower() for k in new_keywords if k.strip()]))
     
-    try:
-        ws = await get_google_sheet_client(CATEGORIES_SHEET_NAME)
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            ws = await get_google_sheet_client(CATEGORIES_SHEET_NAME)
+            break
+        except SheetConnectionError:
+            retry_count += 1
+            if retry_count >= max_retries:
+                return False
+            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
 
-        list_of_lists = await asyncio.to_thread(ws.get_all_values, value_render_option='UNFORMATTED_VALUE')
-        
-        for i, row in enumerate(list_of_lists):
-            if i > 0 and row and row[0].strip() == category:
+    try:
+        # Вместо получения всех значений, ищем только нужную строку
+        try:
+            # Ищем категорию в первом столбце
+            cell = await asyncio.to_thread(ws.find, category, in_column=1)
+            row_index = cell.row
+            
+            # Получаем только строку с нужной категорией
+            row = await asyncio.to_thread(ws.row_values, row_index, value_render_option='UNFORMATTED_VALUE')
+            
+            if row and row[0].strip() == category:
                 
-                row_index = i + 1 
-                current_keywords_str = row[1].strip() if len(row) > 1 else '' 
+                current_keywords_str = row[1].strip() if len(row) > 1 else ''
                 
                 current_keywords = [k.strip().lower() for k in current_keywords_str.split(',') if k.strip()]
                 unique_new_keywords = [k for k in normalized_keywords_to_add if k not in current_keywords]
@@ -195,6 +233,9 @@ async def add_keywords_to_sheet(category: str, new_keywords: List[str]) -> bool:
 
                 logger.info(f"✅ Добавлено {len(unique_new_keywords)} новых ключевых слов к категории '{category}'.")
                 return True
+        except gspread.exceptions.CellNotFound:
+            logger.warning(f"Категория '{category}' не найдена в столбце A листа 'Categories'. Ключевые слова не добавлены.")
+            return False
         
         logger.warning(f"Категория '{category}' не найдена в столбце A листа 'Categories'. Ключевые слова не добавлены.")
         return False
@@ -204,3 +245,4 @@ async def add_keywords_to_sheet(category: str, new_keywords: List[str]) -> bool:
     except Exception as e:
         logger.error(f"❌ Ошибка при добавлении ключевых слов в Google Sheets: {e}")
         return False
+

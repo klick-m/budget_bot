@@ -6,10 +6,10 @@ from typing import Optional, Literal # <--- Добавлен Literal
 class CheckData(BaseModel):
     """Модель данных, извлекаемых из API чека."""
     # Используем Literal для указания, что значение может быть только "Расход"
-    type: Literal["Расход"] = Field('Расход') 
+    type: Literal["Расход"] = Field('Расход')
     
     category: str
-    amount: float = Field(..., gt=0)
+    amount: float = Field(..., gt=0, le=1000)  # Ограничение максимальной суммы
     comment: str
     retailer_name: str = ''
     items_list: str = ''
