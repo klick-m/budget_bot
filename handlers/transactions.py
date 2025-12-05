@@ -125,11 +125,22 @@ async def finalize_transaction(message_to_edit: types.Message, state: FSMContext
 # ----------------------------------------------------------------------
 
 async def command_start_handler(message: types.Message):
+    # Создаем Reply-клавиатуру с командами
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="💸 Добавить транзакцию")],
+            [types.KeyboardButton(text="📜 История транзакций")],
+            [types.KeyboardButton(text="🧪 Проверить Sheets")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+    
     await message.answer(
         f"Привет, **{message.from_user.full_name}**! 👋\n"
         "Выберите действие на клавиатуре ниже, или просто отправьте фото чека с QR-кодом для быстрого добавления.",
         parse_mode="Markdown",
-        reply_markup=get_main_keyboard()
+        reply_markup=keyboard
     )
 
 

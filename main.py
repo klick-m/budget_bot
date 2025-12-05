@@ -37,9 +37,9 @@ dp = Dispatcher()
 def register_handlers(dp: Dispatcher):
     
     # 1. Команды и Основные кнопки
-    # ВНИМАНИЕ: CommandStart не требует AllowedUsersFilter, 
+    # ВНИМАНИЕ: CommandStart не требует AllowedUsersFilter,
     # так как мы хотим, чтобы все могли вызвать /start, но фильтр можно оставить для контроля.
-    dp.message.register(command_start_handler, F.text.startswith('/start'), AllowedUsersFilter()) 
+    dp.message.register(command_start_handler, F.text.startswith('/start'), AllowedUsersFilter())
     dp.message.register(test_sheets_handler, Command("test_sheets"), AllowedUsersFilter())
     dp.message.register(test_sheets_handler, F.text == "🧪 Проверить Sheets", AllowedUsersFilter())
     dp.message.register(new_transaction_handler, Command("new_transaction"), AllowedUsersFilter())
@@ -75,16 +75,7 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(close_history_handler, F.data == "close_history", AllowedUsersFilter())
 
 
-async def set_default_commands(bot: Bot):
-    """Устанавливает полный список команд для меню бота."""
-    commands = [
-        BotCommand(command="start", description="🔄 Перезапустить бота"),
-        BotCommand(command="new_transaction", description="💸 Добавить транзакцию вручную"),
-        BotCommand(command="history", description="📜 Показать историю транзакций"),
-        BotCommand(command="test_sheets", description="🧪 Проверить соединение с Google Sheets")
-    ]
-    await bot.set_my_commands(commands)
-    logger.info("✅ Полный список команд успешно установлен.")
+# Функция set_default_commands удалена, так как команды теперь отображаются в inline-клавиатуре
 
 
 async def main():
@@ -99,7 +90,7 @@ async def main():
     
     register_handlers(dp)
     
-    await set_default_commands(bot)
+    # Удален вызов set_default_commands, так как команды теперь отображаются в inline-клавиатуре
         
     logger.info("🚀 Бот запущен! Ожидание команд...")
     
