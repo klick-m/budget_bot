@@ -75,7 +75,7 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(close_history_handler, F.data == "close_history", AllowedUsersFilter())
 
 
-async def set_default_commands(dp: Dispatcher):
+async def set_default_commands(bot: Bot):
     """Устанавливает полный список команд для меню бота."""
     commands = [
         BotCommand(command="start", description="🔄 Перезапустить бота"),
@@ -83,7 +83,7 @@ async def set_default_commands(dp: Dispatcher):
         BotCommand(command="history", description="📜 Показать историю транзакций"),
         BotCommand(command="test_sheets", description="🧪 Проверить соединение с Google Sheets")
     ]
-    await dp.bot.set_my_commands(commands)
+    await bot.set_my_commands(commands)
     logger.info("✅ Полный список команд успешно установлен.")
 
 
@@ -99,7 +99,7 @@ async def main():
     
     register_handlers(dp)
     
-    await set_default_commands(dp)
+    await set_default_commands(bot)
         
     logger.info("🚀 Бот запущен! Ожидание команд...")
     
