@@ -19,6 +19,9 @@ from utils.exceptions import SheetWriteError, CheckApiTimeout, CheckApiRecogniti
 from utils.service_wrappers import safe_answer, edit_or_send
 from utils.receipt_logic import parse_check_from_api, extract_learnable_keywords
 from utils.category_classifier import classifier
+from utils.keyboards import get_history_keyboard, HistoryCallbackData
+from sheets.client import get_latest_transactions
+from aiogram.filters import Command, CommandObject
 
 
 # --- A. ФИЛЬТР И FSM ---
@@ -584,3 +587,109 @@ async def cancel_check(callback: types.CallbackQuery, state: FSMContext, bot: Bo
         text="❌ **Чек отменен.** Выберите действие на клавиатуре ниже.",
         parse_mode="Markdown"
     )
+
+
+async def history_command_handler(message: types.Message):
+    """Обработчик команды /history для просмотра последних транзакций."""
+    # Получаем последние 5 транзакций с нулевым смещением
+    user_id = message.from_user.username or str(message.from_user.id)
+    transactions = await get_latest_transactions(user_id=user_id, limit=5, offset=0)
+    
+    if not transactions:
+        await message.answer("📋 У вас пока нет транзакций в истории.")
+        return
+
+    # Формируем сообщение с транзакциями
+    history_text = "📜 *История ваших последних транзакций:*\n\n"
+    for i, transaction in enumerate(transactions, 1):
+        # Обрезаем комментарий до 20 символов, если он длиннее
+        comment = transaction['comment'] if transaction['comment'] else 'Нет'
+        if len(comment) > 20:
+            comment = comment[:20] + "..."
+        history_text += (
+            f"{i}. *{transaction['date']} {transaction['time']}*\n"
+            f"   Тип: {transaction['type']}\n"
+            f"   Категория: {transaction['category']}\n"
+            f"   Сумма: {transaction['amount']} руб.\n"
+            f"   Комментарий: {comment}\n\n"
+        )
+    
+    # Проверяем, есть ли следующие транзакции для пагинации
+    # Получаем 6-ю транзакцию, чтобы проверить, есть ли следующая страница
+    next_transactions = await get_latest_transactions(user_id=user_id, limit=1, offset=5)
+    has_next = len(next_transactions) > 0
+
+    # Создаем клавиатуру с пагинацией
+    keyboard = get_history_keyboard(offset=0, has_next=has_next)
+
+    await message.answer(history_text, reply_markup=keyboard, parse_mode="Markdown")
+
+
+async def history_callback_handler(callback: types.CallbackQuery, callback_data: HistoryCallbackData):
+    """Обработчик кнопок пагинации истории транзакций."""
+    await safe_answer(callback)  # Безопасно отвечаем на callback
+    
+    offset = callback_data.offset
+    direction = callback_data.direction
+    
+    # Получаем транзакции с новым смещением
+    user_id = callback.from_user.username or str(callback.from_user.id)
+    transactions = await get_latest_transactions(user_id=user_id, limit=5, offset=offset)
+    
+    if not transactions:
+        await callback.message.edit_text("📋 У вас пока нет транзакций в истории.")
+        return
+
+    # Формируем сообщение с транзакциями
+    history_text = "📜 *История ваших транзакций:*\n\n"
+    for i, transaction in enumerate(transactions, 1):
+        # Обрезаем комментарий до 20 символов, если он длиннее
+        comment = transaction['comment'] if transaction['comment'] else 'Нет'
+        if len(comment) > 20:
+            comment = comment[:20] + "..."
+        history_text += (
+            f"{i}. *{transaction['date']} {transaction['time']}*\n"
+            f"   Тип: {transaction['type']}\n"
+            f"   Категория: {transaction['category']}\n"
+            f"   Сумма: {transaction['amount']} руб.\n"
+            f"   Комментарий: {comment}\n\n"
+        )
+    
+    # Проверяем, есть ли следующие транзакции для пагинации
+    # Получаем транзакцию после текущей страницы, чтобы проверить, есть ли следующая страница
+    next_transactions = await get_latest_transactions(user_id=user_id, limit=1, offset=offset + 5)
+    has_next = len(next_transactions) > 0
+
+    # Проверяем, есть ли предыдущие транзакции для пагинации
+    has_prev = offset > 0
+
+    # Создаем клавиатуру с пагинацией
+    keyboard = get_history_keyboard(offset=offset, has_next=has_next)
+
+    # Проверяем, изменилось ли содержимое сообщения или клавиатура
+    # Если нет, то не пытаемся редактировать сообщение, чтобы избежать ошибки "message is not modified"
+    current_text = callback.message.text or ""
+    current_reply_markup = callback.message.reply_markup
+    
+    # Преобразуем клавиатуру в строку для сравнения
+    current_markup_str = str(current_reply_markup) if current_reply_markup else ""
+    new_markup_str = str(keyboard)
+    
+    if current_text != history_text or current_markup_str != new_markup_str:
+        # Обновляем сообщение с новыми транзакциями и клавиатурой
+        await edit_or_send(callback.bot, callback.message, history_text, reply_markup=keyboard, parse_mode="Markdown")
+    else:
+        # Если контент не изменился, просто отвечаем на callback, чтобы убрать "часики" в интерфейсе
+        await safe_answer(callback)
+    
+    
+async def close_history_handler(callback: types.CallbackQuery):
+    """Обработчик кнопки закрытия истории транзакций."""
+    await safe_answer(callback) # Безопасно отвечаем на callback
+    
+    # Удаляем сообщение с историей транзакций
+    try:
+        await callback.message.delete()
+    except Exception:
+        # Если не удалось удалить сообщение, редактируем его, чтобы убрать клавиатуру
+        await edit_or_send(callback.bot, callback.message, "📜 *История транзакций закрыта.*", parse_mode="Markdown")

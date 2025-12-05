@@ -6,10 +6,10 @@ from aiogram.filters import Command
 # Импортируем из нашей новой структуры
 from config import BOT_TOKEN, logger
 from handlers.transactions import (
-    command_start_handler, 
-    test_sheets_handler, 
-    new_transaction_handler, 
-    handle_photo, 
+    command_start_handler,
+    test_sheets_handler,
+    new_transaction_handler,
+    handle_photo,
     process_type_choice,
     process_category_choice,
     process_category_choice_after_check,
@@ -18,11 +18,14 @@ from handlers.transactions import (
     process_comment_entry,
     process_comment_skip,
     cancel_check,
+    history_command_handler,
+    history_callback_handler,
+    close_history_handler,
     AllowedUsersFilter,
-    Transaction 
+    Transaction
 )
 from sheets.client import load_categories_from_sheet
-from utils.keyboards import get_main_keyboard 
+from utils.keyboards import get_main_keyboard, HistoryCallbackData
 from aiogram.types import BotCommand, MenuButtonWebApp
 
 
@@ -41,6 +44,7 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(test_sheets_handler, F.text == "🧪 Проверить Sheets", AllowedUsersFilter())
     dp.message.register(new_transaction_handler, Command("new_transaction"), AllowedUsersFilter())
     dp.message.register(new_transaction_handler, F.text == "💸 Добавить транзакцию", AllowedUsersFilter())
+    dp.message.register(history_command_handler, Command("history"), AllowedUsersFilter())
 
     # 2. Обработка чеков
     dp.message.register(handle_photo, F.photo | F.document, AllowedUsersFilter())
@@ -64,16 +68,23 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(process_amount_entry, Transaction.entering_amount, F.text, AllowedUsersFilter())
     dp.message.register(process_comment_entry, Transaction.entering_comment, F.text, AllowedUsersFilter())
     dp.callback_query.register(process_comment_skip, F.data == "comment_none", Transaction.entering_comment, AllowedUsersFilter())
+    
+    # Обработчик для истории транзакций и пагинации
+    dp.message.register(history_command_handler, F.text == "📜 История транзакций", AllowedUsersFilter())
+    dp.callback_query.register(history_callback_handler, HistoryCallbackData.filter(), AllowedUsersFilter())
+    dp.callback_query.register(close_history_handler, F.data == "close_history", AllowedUsersFilter())
 
 
-async def set_commands(bot: Bot):
-    """Устанавливает команды для меню бота (минимальный набор)."""
+async def set_default_commands(dp: Dispatcher):
+    """Устанавливает полный список команд для меню бота."""
     commands = [
         BotCommand(command="start", description="🔄 Перезапустить бота"),
-        BotCommand(command="new_transaction", description="💸 Добавить транзакцию вручную")
+        BotCommand(command="new_transaction", description="💸 Добавить транзакцию вручную"),
+        BotCommand(command="history", description="📜 Показать историю транзакций"),
+        BotCommand(command="test_sheets", description="🧪 Проверить соединение с Google Sheets")
     ]
-    await bot.set_my_commands(commands)
-    logger.info("✅ Меню команд успешно установлено.")
+    await dp.bot.set_my_commands(commands)
+    logger.info("✅ Полный список команд успешно установлен.")
 
 
 async def main():
@@ -88,7 +99,7 @@ async def main():
     
     register_handlers(dp)
     
-    await set_commands(bot) 
+    await set_default_commands(dp)
         
     logger.info("🚀 Бот запущен! Ожидание команд...")
     

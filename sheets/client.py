@@ -246,3 +246,76 @@ async def add_keywords_to_sheet(category: str, new_keywords: List[str]) -> bool:
         logger.error(f"❌ Ошибка при добавлении ключевых слов в Google Sheets: {e}")
         return False
 
+
+async def get_latest_transactions(user_id: str, limit: int = 5, offset: int = 0) -> list[dict]:
+    """
+    Извлекает последние limit транзакций пользователя user_id из таблицы RawData,
+    начиная со смещения offset. Функция возвращает список словарей.
+    """
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            ws = await get_google_sheet_client(DATA_SHEET_NAME)
+            break
+        except SheetConnectionError as e:
+            retry_count += 1
+            if retry_count >= max_retries:
+                raise SheetConnectionError(f"Не удалось подключиться к Google Sheets после {max_retries} попыток: {e}")
+            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
+
+    try:
+        # Получаем все значения из таблицы
+        all_values = await asyncio.to_thread(ws.get_all_values)
+        
+        # Пропускаем заголовок (если он есть)
+        if all_values and len(all_values) > 0:
+            headers = all_values[0]  # Предполагаем, что первая строка - заголовки
+            rows = all_values[1:]
+        else:
+            return []
+        
+        # Фильтруем транзакции по username (user_id)
+        user_transactions = []
+        for row in rows:
+            if len(row) > 6:  # Убедимся, что индекс username (6) доступен
+                username = row[6] if len(row) > 6 else ""
+                if username == user_id or str(user_id) in username:
+                    # Создаем словарь с данными транзакции
+                    transaction_dict = {
+                        "date": row[0] if len(row) > 0 else "",
+                        "time": row[1] if len(row) > 1 else "",
+                        "type": row[2] if len(row) > 2 else "",
+                        "category": row[3] if len(row) > 3 else "",
+                        "amount": row[4] if len(row) > 4 else "",
+                        "comment": row[5] if len(row) > 5 else "",
+                        "username": row[6] if len(row) > 6 else "",
+                        "retailer_name": row[7] if len(row) > 7 else "",
+                        "items_list": row[8] if len(row) > 8 else "",
+                        "payment_info": row[9] if len(row) > 9 else ""
+                    }
+                    user_transactions.append(transaction_dict)
+        
+        # Сортируем транзакции по дате и времени (предполагаем формат DD.MM.YYYY HH:MM:SS)
+        def parse_datetime(transaction):
+            try:
+                dt_str = f"{transaction['date']} {transaction['time']}"
+                return datetime.strptime(dt_str, "%d.%m.%Y %H:%M:%S")
+            except:
+                # Если формат даты не распознан, возвращаем минимальную дату
+                return datetime.min
+
+        user_transactions.sort(key=parse_datetime, reverse=True)
+        
+        # Применяем лимит и смещение
+        start_idx = offset
+        end_idx = offset + limit
+        paginated_transactions = user_transactions[start_idx:end_idx]
+        
+        return paginated_transactions
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при получении транзакций пользователя {user_id}: {e}")
+        return []
+
