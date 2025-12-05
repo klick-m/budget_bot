@@ -45,7 +45,8 @@ class TransactionCategoryClassifier:
                 bigram = f"{words[i]}_{words[i+1]}"
                 features.append(bigram)
         
-        return features
+        # Убираем дубликаты
+        return list(set(features))
     
     def train(self, transactions: List[TransactionData]):
         """
@@ -86,11 +87,15 @@ class TransactionCategoryClassifier:
         Расчет TF-IDF для признака в категории
         """
         # Term Frequency в категории
-        tf = self.category_features[category][feature] / sum(self.category_features[category].values())
+        category_sum = sum(self.category_features[category].values())
+        if category_sum == 0:
+            tf = 0  # Если сумма равна нулю, то и частота равна нулю
+        else:
+            tf = self.category_features[category][feature] / category_sum
         
         # Inverse Document Frequency
         category_containing_feature = sum(
-            1 for cat in self.categories 
+            1 for cat in self.categories
             if self.category_features[cat][feature] > 0
         )
         idf = math.log(self.total_transactions / category_containing_feature) if category_containing_feature > 0 else 0
@@ -119,6 +124,9 @@ class TransactionCategoryClassifier:
                     # Добавляем к оценке с использованием TF-IDF
                     tfidf = self._calculate_tfidf(feature, category)
                     category_score += feature_prob * (1 + tfidf)
+                else:
+                    # Если в категории нет признаков, пропускаем этот признак
+                    continue
             
             # Учитываем априорную вероятность категории
             prior_prob = self.category_transactions_count[category] / self.total_transactions if self.total_transactions > 0 else 0
@@ -151,6 +159,12 @@ class TransactionCategoryClassifier:
         Возвращает лучшую категорию из существующих с уровнем уверенности.
         """
         return self.predict_category(transaction)
+    
+    def get_category_keywords(self, category: str) -> List[str]:
+        """
+        Возвращает ключевые слова для указанной категории.
+        """
+        return self.category_keywords.get(category, [])
 
 
 # Глобальный экземпляр классификатора
