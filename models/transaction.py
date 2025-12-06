@@ -9,7 +9,7 @@ class CheckData(BaseModel):
     type: Literal["Расход"] = Field('Расход')
     
     category: str
-    amount: float = Field(..., gt=0, le=1000)  # Ограничение максимальной суммы
+    amount: float = Field(..., gt=0, le=100000)  # Ограничение максимальной суммы
     comment: str
     retailer_name: str = ''
     items_list: str = ''
