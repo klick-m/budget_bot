@@ -15,6 +15,8 @@ from aiogram import F
 from config import ALLOWED_USER_IDS, CATEGORY_STORAGE, logger, SHEET_WRITE_TIMEOUT
 from sheets.client import write_transaction, add_keywords_to_sheet, load_categories_from_sheet
 from models.transaction import TransactionData, CheckData
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
 from utils.exceptions import SheetWriteError, CheckApiTimeout, CheckApiRecognitionError
 from utils.service_wrappers import safe_answer, edit_or_send
 from utils.receipt_logic import parse_check_from_api, extract_learnable_keywords
@@ -35,6 +37,18 @@ class AllowedUsersFilter(BaseFilter):
              
         return message.from_user.id in ALLOWED_USER_IDS
 
+@dataclass
+class TransactionDraft:
+    """Структура данных для черновика транзакции"""
+    type: Optional[str] = None
+    category: Optional[str] = None
+    amount: Optional[float] = None
+    comment: Optional[str] = ""
+    retailer_name: Optional[str] = ""
+    items_list: Optional[str] = ""
+    payment_info: Optional[str] = ""
+    transaction_dt: Optional[datetime] = None
+
 class Transaction(StatesGroup):
     choosing_type = State()
     choosing_category = State()
@@ -43,6 +57,7 @@ class Transaction(StatesGroup):
     confirming_auto_check = State()  # Подтверждение автоматически распознанного чека
     entering_amount = State()
     entering_comment = State()
+    editing_draft = State()  # Новое состояние для управления черновиком
 
 
 # --- B. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -67,16 +82,16 @@ async def finalize_transaction(message_to_edit: types.Message, state: FSMContext
     # 1. Формируем Pydantic модель TransactionData из FSM-данных
     try:
         transaction = TransactionData(
-            type=data['type'],
-            category=data['category'],
-            amount=data['amount'],
+            type=data.get('type', ''),
+            category=data.get('category', ''),
+            amount=data.get('amount', 0.0),
             comment=data.get('comment', ''),
             username=message_to_edit.chat.username or message_to_edit.chat.full_name,
             retailer_name=data.get('retailer_name', ''),
             items_list=data.get('items_list', ''),
             payment_info=data.get('payment_info', ''),
             # Используем transaction_dt, если она была сохранена из чека, иначе default_factory
-            transaction_dt=data.get('transaction_dt', datetime.now()) 
+            transaction_dt=data.get('transaction_dt', datetime.now())
         )
     except Exception as e:
         logger.error(f"Ошибка при создании TransactionData: {e}")
@@ -177,15 +192,81 @@ async def test_sheets_handler(message: types.Message):
 
 async def new_transaction_handler(message: types.Message, state: FSMContext):
     await state.clear()
-    await state.set_state(Transaction.choosing_type)
     
-    keyboard = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [types.InlineKeyboardButton(text="💸 Расход", callback_data="type_Расход")],
-            [types.InlineKeyboardButton(text="💰 Доход", callback_data="type_Доход")]
-        ]
-    )
-    await message.answer("Выберите тип операции:", reply_markup=keyboard)
+    # Создаем черновик транзакции
+    draft = TransactionDraft()
+    await state.update_data(draft=draft.__dict__)
+    await state.set_state(Transaction.editing_draft)
+    
+    # Отправляем сообщение с черновиком и inline-кнопками для редактирования
+    await send_draft_message(message, state)
+
+async def send_draft_message(message: types.Message, state: FSMContext):
+    """Отправляет или редактирует сообщение с черновиком транзакции"""
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    
+    # Формируем текст сообщения с черновиком
+    draft_text = format_draft_text(draft)
+    
+    # Создаем inline-кнопки для редактирования
+    keyboard = create_draft_inline_keyboard(draft)
+    
+    await edit_or_send(message.bot, message, text=draft_text, reply_markup=keyboard, parse_mode="Markdown")
+
+def format_draft_text(draft: TransactionDraft) -> str:
+    """Форматирует текст черновика транзакции"""
+    type_str = f"*Тип:* {draft.type}" if draft.type else "*Тип:* Не указан"
+    category_str = f"*Категория:* {draft.category}" if draft.category else "*Категория:* Не указана"
+    amount_str = f"*Сумма:* {draft.amount}" if draft.amount else "*Сумма:* Не указана"
+    comment_str = f"*Комментарий:* {draft.comment}" if draft.comment else "*Комментарий:* Не указан"
+    retailer_str = f"*Продавец:* {draft.retailer_name}" if draft.retailer_name else ""
+    items_str = f"*Товары:* {draft.items_list}" if draft.items_list else ""
+    payment_str = f"*Оплата:* {draft.payment_info}" if draft.payment_info else ""
+    date_str = f"*Дата:* {draft.transaction_dt.strftime('%d.%m.%Y %H:%M')}" if draft.transaction_dt else ""
+    
+    draft_text = f"📝 *Черновик транзакции*\n\n{type_str}\n{category_str}\n{amount_str}\n{comment_str}"
+    if retailer_str:
+        draft_text += f"\n{retailer_str}"
+    if items_str:
+        draft_text += f"\n{items_str}"
+    if payment_str:
+        draft_text += f"\n{payment_str}"
+    if date_str:
+        draft_text += f"\n{date_str}"
+    
+    return draft_text
+
+def create_draft_inline_keyboard(draft: TransactionDraft) -> types.InlineKeyboardMarkup:
+    """Создает inline-клавиатуру для редактирования черновика"""
+    keyboard_buttons = []
+    
+    # Кнопки для редактирования полей
+    if not draft.type:
+        keyboard_buttons.append([types.InlineKeyboardButton(text="✏️ Выбрать тип", callback_data="edit_type")])
+    else:
+        keyboard_buttons.append([types.InlineKeyboardButton(text="✏️ Изменить тип", callback_data="edit_type")])
+    
+    if not draft.category:
+        keyboard_buttons.append([types.InlineKeyboardButton(text="🏷️ Выбрать категорию", callback_data="edit_category_draft")])
+    else:
+        keyboard_buttons.append([types.InlineKeyboardButton(text="🏷️ Изменить категорию", callback_data="edit_category_draft")])
+    
+    if not draft.amount:
+        keyboard_buttons.append([types.InlineKeyboardButton(text="💰 Ввести сумму", callback_data="edit_amount")])
+    else:
+        keyboard_buttons.append([types.InlineKeyboardButton(text="💰 Изменить сумму", callback_data="edit_amount")])
+    
+    keyboard_buttons.append([types.InlineKeyboardButton(text="💬 Изменить комментарий", callback_data="edit_comment")])
+    
+    # Кнопка завершения
+    if draft.type and draft.category and draft.amount:
+        keyboard_buttons.append([types.InlineKeyboardButton(text="✅ Подтвердить и записать", callback_data="confirm_draft")])
+    else:
+        keyboard_buttons.append([types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_draft")])
+    
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
 
 # --- D. ХЕНДЛЕР ЧЕКОВ (СЛОЖНЫЙ) ---
@@ -459,6 +540,13 @@ async def process_edit_category(callback: types.CallbackQuery, state: FSMContext
 
 async def process_amount_entry(message: types.Message, state: FSMContext, bot: Bot):
     
+    # Проверяем, используем ли мы новый флоу с черновиком
+    data = await state.get_data()
+    if 'draft' in data:
+        # Это новый флоу, передаем в соответствующий обработчик
+        await handle_amount_entry_draft(message, state, bot)
+        return
+    
     try:
         amount = round(float(message.text.replace(',', '.')), 2)
         if amount <= 0:
@@ -483,22 +571,52 @@ async def process_amount_entry(message: types.Message, state: FSMContext, bot: B
 
 async def process_comment_entry(message: types.Message, state: FSMContext, bot: Bot):
     
+    # Проверяем, используем ли мы новый флоу с черновиком
+    data = await state.get_data()
+    if 'draft' in data:
+        # Это новый флоу, передаем в соответствующий обработчик
+        await handle_comment_entry_draft(message, state, bot)
+        return
+    
     comment = message.text
     await state.update_data(comment=comment)
     
+    # Проверяем, все ли обязательные поля заполнены
+    data = await state.get_data()
+    transaction_type = data.get('type')
+    category = data.get('category')
+    amount = data.get('amount')
+    
     # Отправляем новое сообщение, чтобы получить ID для редактирования статуса
-    status_msg = await message.answer("⏳ **Записываю транзакцию...** Ожидайте.") 
+    status_msg = await message.answer("⏳ **Записываю транзакцию...** Ожидайте.")
 
-    await finalize_transaction(status_msg, state, bot)
+    # Проверяем наличие всех обязательных полей перед записью
+    if transaction_type and category and amount is not None and amount > 0:
+        await finalize_transaction(status_msg, state, bot)
+    else:
+        # Создаем клавиатуру с кнопкой "Без комментария" для повторного ввода
+        keyboard = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(text="Без комментария", callback_data="comment_none")]
+            ]
+        )
+        await edit_or_send(bot, status_msg, "❌ Не все обязательные поля заполнены. Пожалуйста, продолжайте заполнять транзакцию.", reply_markup=keyboard, parse_mode="Markdown")
+        await state.set_state(Transaction.entering_comment)  # Остаемся в текущем состоянии
 
 
 async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
     
     await safe_answer(callback) # <--- ИСПОЛЬЗУЕМ ОБЕРТКУ safe_answer
     
+    # Проверяем, используем ли мы новый флоу с черновиком
     data = await state.get_data()
+    if 'draft' in data:
+        # Это новый флоу, передаем в соответствующий обработчик
+        await handle_comment_skip_draft(callback, state, bot)
+        return
+    
     if not data.get('comment'):
-        await state.update_data(comment="") 
+        await state.update_data(comment="")
     
     # Проверяем, находимся ли мы в состоянии подтверждения чека (нужно добавить ключевые слова)
     current_state = await state.get_state()
@@ -573,15 +691,29 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
         
         await finalize_transaction(callback.message, state, bot)
     else:
-        # Обычное пропускание комментария
-        await edit_or_send(
-            bot,
-            callback.message,
-            text="⏳ **Записываю транзакцию...** Ожидайте.",
-            parse_mode="Markdown"
-        )
+        # Обычное пропускание комментария - проверяем, все ли обязательные поля заполнены
+        transaction_type = data.get('type')
+        category = data.get('category')
+        amount = data.get('amount')
         
-        await finalize_transaction(callback.message, state, bot)
+        if transaction_type and category and amount is not None and amount > 0:
+            await edit_or_send(
+                bot,
+                callback.message,
+                text="⏳ **Записываю транзакцию...** Ожидайте.",
+                parse_mode="Markdown"
+            )
+            
+            await finalize_transaction(callback.message, state, bot)
+        else:
+            # Создаем клавиатуру с кнопкой "Без комментария" для повторного ввода
+            keyboard = types.InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [types.InlineKeyboardButton(text="Без комментария", callback_data="comment_none")]
+                ]
+            )
+            await edit_or_send(bot, callback.message, "❌ Не все обязательные поля заполнены. Пожалуйста, продолжайте заполнять транзакцию.", reply_markup=keyboard, parse_mode="Markdown")
+            await state.set_state(Transaction.entering_comment)  # Остаемся в текущем состоянии
 
 
 async def cancel_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
@@ -598,6 +730,318 @@ async def cancel_check(callback: types.CallbackQuery, state: FSMContext, bot: Bo
         text="❌ **Чек отменен.** Выберите действие на клавиатуре ниже.",
         parse_mode="Markdown"
     )
+
+
+# --- НОВЫЕ ХЕНДЛЕРЫ ДЛЯ РЕДАКТИРОВАНИЯ ЧЕРНОВИКА ---
+# ----------------------------------------------------------------------
+
+async def handle_edit_type(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик для редактирования типа транзакции"""
+    await safe_answer(callback)
+    
+    keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [types.InlineKeyboardButton(text="💸 Расход", callback_data="type_Расход")],
+            [types.InlineKeyboardButton(text="💰 Доход", callback_data="type_Доход")]
+        ]
+    )
+    await edit_or_send(bot, callback.message, "Выберите тип операции:", reply_markup=keyboard)
+
+
+async def handle_type_choice(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик выбора типа транзакции"""
+    await safe_answer(callback)
+    
+    transaction_type = callback.data.split('_')[1]
+    
+    # Обновляем черновик
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    draft.type = transaction_type
+    await state.update_data(draft=draft.__dict__)
+    
+    # Возвращаемся к редактированию черновика
+    await send_draft_message(callback.message, state)
+
+
+async def handle_edit_category_draft(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик для редактирования категории транзакции"""
+    await safe_answer(callback)
+    
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    
+    transaction_type = draft.type or "Расход"  # По умолчанию "Расход" если тип не выбран
+    category_list = CATEGORY_STORAGE.expense if transaction_type == "Расход" else CATEGORY_STORAGE.income
+    
+    if not category_list:
+        await edit_or_send(
+            bot,
+            callback.message,
+            text=f"❌ Категории для типа '{transaction_type}' не загружены. Проверьте лист 'Categories'!",
+        )
+        return
+
+    buttons = [
+        types.InlineKeyboardButton(text=cat, callback_data=f"cat_{cat}")
+        for cat in category_list
+    ]
+    keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    )
+    
+    await edit_or_send(
+        bot,
+        callback.message,
+        text=f"Выбран тип: **{transaction_type}**. \nВыберите категорию:",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+
+async def handle_category_choice_draft(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик выбора категории транзакции"""
+    await safe_answer(callback)
+    
+    category = callback.data.split('_')[1]
+    
+    # Обновляем черновик
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    draft.category = category
+    await state.update_data(draft=draft.__dict__)
+    
+    # Возвращаемся к редактированию черновика
+    await send_draft_message(callback.message, state)
+
+
+async def handle_edit_amount(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик для редактирования суммы транзакции"""
+    await safe_answer(callback)
+    
+    await state.set_state(Transaction.entering_amount)
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    
+    if draft.amount:
+        await edit_or_send(
+            bot,
+            callback.message,
+            text=f"Текущая сумма: **{draft.amount}**. Введите новую сумму (только число).",
+            parse_mode="Markdown"
+        )
+    else:
+        await edit_or_send(
+            bot,
+            callback.message,
+            text="Введите сумму (только число).",
+            parse_mode="Markdown"
+        )
+
+
+async def handle_amount_entry_draft(message: types.Message, state: FSMContext, bot: Bot):
+    """Обработчик ввода суммы транзакции для черновика"""
+    
+    try:
+        amount = round(float(message.text.replace(',', '.')), 2)
+        if amount <= 0:
+            raise ValueError("Сумма должна быть положительной")
+        if amount > 100000:  # Ограничение максимальной суммы
+            await message.answer("❌ Сумма слишком велика. Пожалуйста, введите сумму до 100000.")
+            return
+    except ValueError:
+        await message.answer("🚫 Сумма должна быть положительным числом. Попробуйте снова:")
+        return
+
+    # Обновляем черновик
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    draft.amount = amount
+    await state.update_data(draft=draft.__dict__)
+    
+    # Возвращаемся к основному состоянию редактирования черновика
+    await state.set_state(Transaction.editing_draft)
+    await send_draft_message(message, state)
+
+
+async def handle_edit_comment(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик для редактирования комментария транзакции"""
+    await safe_answer(callback)
+    
+    await state.set_state(Transaction.entering_comment)
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    
+    if draft.comment:
+        keyboard = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(text="Без комментария", callback_data="comment_none_draft")]
+            ]
+        )
+        await edit_or_send(
+            bot,
+            callback.message,
+            text=f"Текущий комментарий: **{draft.comment}**. Введите новый комментарий или нажмите 'Без комментария'.",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+    else:
+        keyboard = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(text="Без комментария", callback_data="comment_none_draft")]
+            ]
+        )
+        await edit_or_send(
+            bot,
+            callback.message,
+            text="Введите комментарий или нажмите 'Без комментария'.",
+            reply_markup=keyboard
+        )
+
+
+async def handle_comment_entry_draft(message: types.Message, state: FSMContext, bot: Bot):
+    """Обработчик ввода комментария транзакции для черновика"""
+    
+    comment = message.text
+
+    # Обновляем черновик
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    draft.comment = comment
+    await state.update_data(draft=draft.__dict__)
+    
+    # Возвращаемся к основному состоянию редактирования черновика
+    await state.set_state(Transaction.editing_draft)
+    await send_draft_message(message, state)
+
+
+async def handle_comment_skip_draft(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик пропуска комментария для черновика"""
+    await safe_answer(callback)
+    
+    # Обновляем черновик
+    data = await state.get_data()
+    draft_dict = data.get('draft', {})
+    draft = TransactionDraft(**draft_dict)
+    draft.comment = ""
+    await state.update_data(draft=draft.__dict__)
+    
+    # Возвращаемся к основному состоянию редактирования черновика
+    await state.set_state(Transaction.editing_draft)
+    await send_draft_message(callback.message, state)
+
+
+async def handle_confirm_draft(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик подтверждения черновика"""
+    await safe_answer(callback)
+    
+    try:
+        # Получаем финальный черновик
+        data = await state.get_data()
+        draft_dict = data.get('draft', {})
+        draft = TransactionDraft(**draft_dict)
+        
+        # Проверяем, все ли обязательные поля заполнены
+        if not draft.type or not draft.category or draft.amount is None or draft.amount <= 0:
+            await edit_or_send(bot, callback.message, "❌ Не все обязательные поля заполнены. Пожалуйста, продолжайте заполнять транзакцию.", parse_mode="Markdown")
+            await state.set_state(Transaction.editing_draft)
+            await send_draft_message(callback.message, state)
+            return
+        
+        # Формируем TransactionData из черновика
+        transaction = TransactionData(
+            type=draft.type or '',
+            category=draft.category or '',
+            amount=draft.amount or 0.0,
+            comment=draft.comment,
+            username=callback.from_user.username or callback.from_user.full_name,
+            retailer_name=draft.retailer_name or "",
+            items_list=draft.items_list or "",
+            payment_info=draft.payment_info or "",
+            transaction_dt=draft.transaction_dt or datetime.now()
+        )
+        
+        # Отправляем сообщение о записи транзакции
+        status_msg = await edit_or_send(bot, callback.message, "⏳ **Записываю транзакцию...** Ожидайте.", parse_mode="Markdown")
+        
+        # Записываем транзакцию
+        await finalize_transaction_draft(status_msg, state, bot, transaction)
+    except Exception as e:
+        logger.error(f"Ошибка при подтверждении черновика: {e}")
+        await edit_or_send(bot, callback.message, f"❌ Произошла ошибка при обработке транзакции: {str(e)}", parse_mode="Markdown")
+        await state.set_state(Transaction.editing_draft)
+        await send_draft_message(callback.message, state)
+
+
+async def handle_cancel_draft(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик отмены черновика"""
+    await safe_answer(callback)
+    
+    await state.clear()
+    await edit_or_send(
+        bot,
+        callback.message,
+        text="❌ **Черновик отменен.** Выберите действие на клавиатуре ниже.",
+        parse_mode="Markdown",
+        reply_markup=get_main_keyboard()
+    )
+
+
+async def finalize_transaction_draft(message_to_edit: types.Message, state: FSMContext, bot: Bot, transaction: TransactionData):
+    """Финализирует транзакцию из черновика: записывает в Sheets, отправляет финальное сообщение."""
+    
+    try:
+        # Проверяем обязательные поля перед записью
+        if not transaction.type or not transaction.category or transaction.amount <= 0:
+            await edit_or_send(bot, message_to_edit, "❌ Не все обязательные поля заполнены. Пожалуйста, продолжайте заполнять транзакцию.", parse_mode="Markdown")
+            await state.set_state(Transaction.editing_draft)
+            await send_draft_message(message_to_edit, state)
+            return
+        
+        # Обучаем классификатор на новой транзакции перед записью
+        transactions_for_training = [transaction]
+        classifier.train(transactions_for_training)
+        
+        # Запись в Google Sheets с таймаутом
+        try:
+            async with asyncio.timeout(SHEET_WRITE_TIMEOUT):
+                await write_transaction(transaction)
+                
+            transaction_dt_str = transaction.transaction_dt.strftime('%d.%m.%Y %H:%M')
+            
+            summary = (
+                f"✅ **Транзакция записана!**\n\n"
+                f"Дата операции: **{transaction_dt_str}**\n"
+                f"Тип: **{transaction.type}**\n"
+                f"Категория: **{transaction.category}**\n"
+                f"Сумма: **{transaction.amount}** руб.\n"
+                f"Комментарий: *{transaction.comment or 'Нет'}*"
+            )
+            
+            await edit_or_send(bot, message_to_edit, summary, parse_mode="Markdown")
+        
+        except asyncio.TimeoutError:
+            await edit_or_send(bot, message_to_edit, f"❌ **Ошибка записи в Google Sheets!** Превышено время ожидания ({SHEET_WRITE_TIMEOUT} сек). Попробуйте повторить транзакцию позже.", parse_mode="Markdown")
+        
+        except SheetWriteError as e:
+            await edit_or_send(bot, message_to_edit, f"❌ **Ошибка записи в Google Sheets!** Ошибка: {e}", parse_mode="Markdown")
+        
+        except Exception as e:
+            await edit_or_send(bot, message_to_edit, f"❌ **Непредвиденная ошибка при записи в Google Sheets:** {e}", parse_mode="Markdown")
+    
+    except Exception as e:
+        logger.error(f"Критическая ошибка в finalize_transaction_draft: {e}")
+        await edit_or_send(bot, message_to_edit, f"❌ **Критическая ошибка при обработке транзакции:** {e}", parse_mode="Markdown")
+    
+    finally:
+        await state.clear()
 
 
 async def history_command_handler(message: types.Message):
@@ -704,3 +1148,25 @@ async def close_history_handler(callback: types.CallbackQuery):
     except Exception:
         # Если не удалось удалить сообщение, редактируем его, чтобы убрать клавиатуру
         await edit_or_send(callback.bot, callback.message, "📜 *История транзакций закрыта.*", parse_mode="Markdown")
+
+
+# --- РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ЧЕРНОВИКА ---
+# ----------------------------------------------------------------------
+
+def register_draft_handlers(dp: Dispatcher):
+    """Регистрирует хендлеры для работы с черновиками транзакций"""
+    # Обработчики inline-кнопок для черновика
+    dp.callback_query.register(handle_edit_type, F.data == "edit_type", Transaction.editing_draft)
+    dp.callback_query.register(handle_type_choice, F.data.startswith("type_"), Transaction.editing_draft)
+    dp.callback_query.register(handle_edit_category_draft, F.data == "edit_category_draft", Transaction.editing_draft)
+    dp.callback_query.register(handle_category_choice_draft, F.data.startswith("cat_"), Transaction.editing_draft)
+    dp.callback_query.register(handle_edit_amount, F.data == "edit_amount", Transaction.editing_draft)
+    dp.callback_query.register(handle_edit_comment, F.data == "edit_comment", Transaction.editing_draft)
+    dp.callback_query.register(handle_confirm_draft, F.data == "confirm_draft", Transaction.editing_draft)
+    dp.callback_query.register(handle_cancel_draft, F.data == "cancel_draft", Transaction.editing_draft)
+    dp.callback_query.register(handle_comment_skip_draft, F.data == "comment_none_draft", Transaction.entering_comment)
+    
+    # Обработчики ввода текста для черновика
+    dp.message.register(handle_amount_entry_draft, Transaction.entering_amount, F.text, AllowedUsersFilter())
+    dp.message.register(handle_comment_entry_draft, Transaction.entering_comment, F.text, AllowedUsersFilter())
+    

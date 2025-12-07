@@ -1,4 +1,9 @@
 # sheets/client.py
+"""
+Модуль для работы с Google Sheets API в асинхронном режиме.
+Все синхронные вызовы обернуты в asyncio.to_thread() для предотвращения блокировки event loop.
+"""
+# sheets/client.py
 import asyncio
 import gspread
 from datetime import datetime
@@ -16,6 +21,10 @@ from config import (
     SHEET_WRITE_TIMEOUT
 )
 # Импортируем наши Pydantic модели
+# --- АРХИТЕКТУРНЫЙ СТАНДАРТ ---
+# Все синхронные функции, использующиеся в асинхронном контексте, должны быть обернуты в asyncio.to_thread()
+# Это предотвращает блокировку event loop и обеспечивает асинхронную производительность
+# --- КЕШИРОВАНИЕ КЛИЕНТОВ И РАБОЧИХ ЛИСТОВ ---
 from models.transaction import TransactionData
 # Импортируем наши кастомные исключения
 from utils.exceptions import SheetConnectionError, SheetWriteError

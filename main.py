@@ -1,5 +1,5 @@
 # main.py
-import asyncio  
+import asyncio
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 
@@ -24,6 +24,7 @@ from handlers.transactions import (
     AllowedUsersFilter,
     Transaction
 )
+from handlers.transactions import register_draft_handlers
 from sheets.client import load_categories_from_sheet
 from utils.keyboards import get_main_keyboard, HistoryCallbackData
 from aiogram.types import BotCommand, MenuButtonWebApp
@@ -89,6 +90,7 @@ async def main():
          return
     
     register_handlers(dp)
+    register_draft_handlers(dp)
     
     # Удален вызов set_default_commands, так как команды теперь отображаются в inline-клавиатуре
         
