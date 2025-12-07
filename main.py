@@ -98,7 +98,12 @@ async def main():
     # В aiogram 3+ MenuButtonWebApp не используется для обычной ReplyKeyboardMarkup,
     # мы просто запускаем start_polling. ReplyKeyboardMarkup будет отображена после /start.
     
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    except asyncio.CancelledError:
+        logger.info("Бот остановлен пользователем")
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем")
 
 if __name__ == "__main__":
     asyncio.run(main())
