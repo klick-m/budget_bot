@@ -54,6 +54,10 @@ CHECK_API_TIMEOUT = 25
 # --- Тайм-ауты и ограничения ---
 SHEET_WRITE_TIMEOUT = 15  # Таймаут для операций с Google Sheets
 
+# --- Настройки Keyword Dictionary ---
+KEYWORDS_SPREADSHEET_ID = os.getenv("KEYWORDS_SPREADSHEET_ID", GOOGLE_SHEET_URL)
+KEYWORDS_SHEET_NAME = os.getenv("KEYWORDS_SHEET_NAME", "Keywords")
+
 # --- ХРАНИЛИЩЕ КАТЕГОРИЙ (замена глобальных переменных) ---
 class CategoryStorage:
     def __init__(self):
@@ -63,7 +67,8 @@ class CategoryStorage:
         self.last_loaded = None
 
 # Единственный экземпляр для доступа ко всем категориям
-CATEGORY_STORAGE = CategoryStorage() 
+CATEGORY_STORAGE = CategoryStorage()
+
 
 # Проверка базовой конфигурации
 if not BOT_TOKEN or not GOOGLE_SHEET_URL:

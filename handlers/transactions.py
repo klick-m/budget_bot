@@ -355,8 +355,14 @@ async def handle_photo(message: types.Message, state: FSMContext):
         transaction_dt=parsed_data.transaction_datetime
     )
     
-    # Применяем улучшенную классификацию
-    predicted_category, confidence = classifier.predict_category(temp_transaction)
+    # Применяем улучшенную классификацию сначала через KeywordDictionary (новая система)
+    # Если новая система дает результат с высокой уверенностью, используем его
+    keyword_result = classifier.get_category_by_keyword(f"{parsed_data.retailer_name} {parsed_data.items_list}")
+    if keyword_result and keyword_result[1] > 0.7:  # Если уверенность выше 0.7
+        predicted_category, confidence = keyword_result
+    else:
+        # Если новая система не дала результата или уверенность низкая, используем ML-классификатор
+        predicted_category, confidence = classifier.predict_category(temp_transaction)
     
     # Вместо предложения новой категории, используем только существующие категории
     if parsed_data.category == fallback_category or confidence < 0.5:

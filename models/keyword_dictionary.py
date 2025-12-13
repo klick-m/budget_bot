@@ -1,0 +1,333 @@
+import re
+from collections import defaultdict, Counter
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional, Set
+from dataclasses import dataclass, field
+
+from sheets.client import GoogleSheetsClient
+
+
+@dataclass
+class KeywordEntry:
+    """Класс для хранения информации о ключевом слове"""
+    keyword: str
+    category: str
+    confidence: float
+    usage_count: int = 0
+    last_used: Optional[datetime] = None
+    created_at: datetime = field(default_factory=datetime.now)
+
+
+class KeywordDictionary:
+    """
+    Класс для системы словаря ключевых слов с категориями и уровнями уверенности.
+    Поддерживает хранение ключевых слов по категориям с весами, обратный индекс для быстрого поиска,
+    статистику использования и биграммы.
+    """
+    
+    def __init__(self, spreadsheet_id: str, sheet_name: str):
+        """
+        Инициализация словаря ключевых слов
+        
+        Args:
+            spreadsheet_id: ID таблицы Google Sheets
+            sheet_name: Название листа в таблице
+        """
+        self.spreadsheet_id = spreadsheet_id
+        self.sheet_name = sheet_name
+        self.sheets_client = GoogleSheetsClient()
+        
+        # Основной словарь: категория -> список ключевых слов
+        self.category_keywords: Dict[str, List[KeywordEntry]] = defaultdict(list)
+        
+        # Обратный индекс: ключевое слово -> категория
+        self.keyword_to_category: Dict[str, KeywordEntry] = {}
+        
+        # Индекс биграмм: биграмма -> категория
+        self.bigram_to_category: Dict[str, KeywordEntry] = {}
+        
+        # Индекс униграмм (отдельных слов) для быстрого поиска
+        self.unigram_to_categories: Dict[str, List[KeywordEntry]] = defaultdict(list)
+        
+        # Статистика использования
+        self.usage_stats: Counter = Counter()
+        
+        # Дата последнего обновления
+        self.last_update: Optional[datetime] = None
+        
+        # Загружаем данные при инициализации
+        self.load_from_sheets()
+    
+    def load_from_sheets(self):
+        """Загрузка данных из Google Sheets"""
+        try:
+            # Получаем данные из Google Sheets
+            data = self.sheets_client.get_sheet_data(self.spreadsheet_id, self.sheet_name)
+            
+            # Очищаем текущие данные
+            self.category_keywords.clear()
+            self.keyword_to_category.clear()
+            self.bigram_to_category.clear()
+            self.unigram_to_categories.clear()
+            
+            # Обрабатываем полученные данные
+            for row in data:
+                if len(row) >= 3:  # Убедимся, что есть все необходимые столбцы
+                    keyword = row[0].strip().lower()
+                    category = row[1].strip()
+                    try:
+                        confidence = float(row[2])
+                    except ValueError:
+                        confidence = 0.5  # Значение по умолчанию при ошибке
+                    
+                    # Создаем новый или обновляем существующий элемент
+                    if keyword in self.keyword_to_category:
+                        # Обновляем существующий элемент
+                        entry = self.keyword_to_category[keyword]
+                        entry.category = category
+                        entry.confidence = confidence
+                    else:
+                        # Создаем новый элемент
+                        entry = KeywordEntry(
+                            keyword=keyword,
+                            category=category,
+                            confidence=confidence
+                        )
+                        self.keyword_to_category[keyword] = entry
+                    
+                    # Добавляем в категорию
+                    self.category_keywords[category].append(entry)
+                    
+                    # Добавляем в индекс униграмм
+                    words = keyword.split()
+                    for word in words:
+                        if word not in self.unigram_to_categories:
+                            self.unigram_to_categories[word] = []
+                        self.unigram_to_categories[word].append(entry)
+                    
+                    # Добавляем биграммы, если слов в фразе больше одного
+                    if len(words) > 1:
+                        for i in range(len(words) - 1):
+                            bigram = f"{words[i]} {words[i + 1]}"
+                            self.bigram_to_category[bigram] = entry
+            
+            self.last_update = datetime.now()
+            
+        except Exception as e:
+            print(f"Ошибка при загрузке данных из Google Sheets: {e}")
+    
+    def update_from_sheets(self):
+        """Обновление данных из Google Sheets"""
+        self.load_from_sheets()
+    
+    def get_category_by_keyword(self, keyword: str) -> Optional[Tuple[str, float]]:
+        """
+        Получение категории по ключевому слову
+        
+        Args:
+            keyword: Ключевое слово для поиска
+            
+        Returns:
+            Кортеж (категория, уверенность) или None, если не найдено
+        """
+        keyword_lower = keyword.strip().lower()
+        
+        # Пробуем найти точное совпадение
+        if keyword_lower in self.keyword_to_category:
+            entry = self.keyword_to_category[keyword_lower]
+            self._update_usage_stats(entry)
+            return entry.category, entry.confidence
+        
+        # Пробуем найти по биграммам
+        words = keyword_lower.split()
+        if len(words) >= 2:
+            for i in range(len(words) - 1):
+                bigram = f"{words[i]} {words[i + 1]}"
+                if bigram in self.bigram_to_category:
+                    entry = self.bigram_to_category[bigram]
+                    self._update_usage_stats(entry)
+                    return entry.category, entry.confidence
+        
+        # Пробуем найти по отдельным словам (униграммам)
+        max_confidence = 0.0
+        best_category = None
+        
+        for word in words:
+            if word in self.unigram_to_categories:
+                for entry in self.unigram_to_categories[word]:
+                    if entry.confidence > max_confidence:
+                        max_confidence = entry.confidence
+                        best_category = entry.category
+        
+        if best_category:
+            # Создаем фиктивную запись для обновления статистики
+            fake_entry = KeywordEntry(
+                keyword=keyword_lower,
+                category=best_category,
+                confidence=max_confidence
+            )
+            self._update_usage_stats(fake_entry)
+            return best_category, max_confidence
+        
+        return None
+    
+    def _update_usage_stats(self, entry: KeywordEntry):
+        """Обновление статистики использования для элемента"""
+        entry.usage_count += 1
+        entry.last_used = datetime.now()
+        self.usage_stats[entry.keyword] += 1
+    
+    def get_categories_by_text(self, text: str) -> List[Tuple[str, float]]:
+        """
+        Получение потенциальных категорий по тексту с учетом биграмм
+        
+        Args:
+            text: Текст для анализа
+            
+        Returns:
+            Список кортежей (категория, уверенность)
+        """
+        results = []
+        text_lower = text.strip().lower()
+        words = text_lower.split()
+        
+        # Проверяем точные совпадения
+        if text_lower in self.keyword_to_category:
+            entry = self.keyword_to_category[text_lower]
+            self._update_usage_stats(entry)
+            results.append((entry.category, entry.confidence))
+        
+        # Проверяем биграммы
+        for i in range(len(words) - 1):
+            bigram = f"{words[i]} {words[i + 1]}"
+            if bigram in self.bigram_to_category:
+                entry = self.bigram_to_category[bigram]
+                self._update_usage_stats(entry)
+                results.append((entry.category, entry.confidence))
+        
+        # Проверяем отдельные слова
+        for word in words:
+            if word in self.unigram_to_categories:
+                for entry in self.unigram_to_categories[word]:
+                    # Избегаем дубликатов
+                    if (entry.category, entry.confidence) not in results:
+                        self._update_usage_stats(entry)
+                        results.append((entry.category, entry.confidence))
+        
+        # Сортируем по уверенности
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        return results
+    
+    def add_keyword(self, keyword: str, category: str, confidence: float = 0.5):
+        """
+        Добавление нового ключевого слова
+        
+        Args:
+            keyword: Ключевое слово
+            category: Категория
+            confidence: Уверенность (0.0-1.0)
+        """
+        keyword_lower = keyword.strip().lower()
+        
+        if keyword_lower in self.keyword_to_category:
+            # Обновляем существующий элемент
+            entry = self.keyword_to_category[keyword_lower]
+            entry.category = category
+            entry.confidence = confidence
+        else:
+            # Создаем новый элемент
+            entry = KeywordEntry(
+                keyword=keyword_lower,
+                category=category,
+                confidence=confidence
+            )
+            self.keyword_to_category[keyword_lower] = entry
+        
+        # Добавляем в категорию
+        self.category_keywords[category].append(entry)
+        
+        # Обновляем индекс униграмм
+        words = keyword_lower.split()
+        for word in words:
+            if word not in self.unigram_to_categories:
+                self.unigram_to_categories[word] = []
+            self.unigram_to_categories[word].append(entry)
+        
+        # Обновляем биграммы
+        if len(words) > 1:
+            for i in range(len(words) - 1):
+                bigram = f"{words[i]} {words[i + 1]}"
+                self.bigram_to_category[bigram] = entry
+        
+        self.last_update = datetime.now()
+    
+    def get_category_keywords(self, category: str) -> List[KeywordEntry]:
+        """
+        Получение всех ключевых слов для категории
+        
+        Args:
+            category: Название категории
+            
+        Returns:
+            Список ключевых слов в категории
+        """
+        return self.category_keywords.get(category, [])
+    
+    def get_all_categories(self) -> List[str]:
+        """Получение всех категорий"""
+        return list(self.category_keywords.keys())
+    
+    def get_usage_stats(self) -> Counter:
+        """Получение статистики использования"""
+        return self.usage_stats
+    
+    def get_keyword_entry(self, keyword: str) -> Optional[KeywordEntry]:
+        """Получение полной информации о ключевом слове"""
+        return self.keyword_to_category.get(keyword.strip().lower())
+    
+    def search_similar_keywords(self, keyword: str, threshold: float = 0.8) -> List[KeywordEntry]:
+        """
+        Поиск похожих ключевых слов по схожести
+        
+        Args:
+            keyword: Ключевое слово для поиска
+            threshold: Порог схожести (0.0-1.0)
+            
+        Returns:
+            Список похожих ключевых слов
+        """
+        keyword_lower = keyword.strip().lower()
+        similar = []
+        
+        for stored_keyword in self.keyword_to_category:
+            similarity = self._calculate_similarity(keyword_lower, stored_keyword)
+            if similarity >= threshold:
+                similar.append(self.keyword_to_category[stored_keyword])
+        
+        return similar
+    
+    def _calculate_similarity(self, s1: str, s2: str) -> float:
+        """
+        Вычисление схожести между двумя строками (упрощенная версия)
+        
+        Args:
+            s1: Первая строка
+            s2: Вторая строка
+            
+        Returns:
+            Коэффициент схожести (0.0-1.0)
+        """
+        # Простой алгоритм схожести - отношение длины пересечения к объединению
+        set1 = set(s1.split())
+        set2 = set(s2.split())
+        
+        if not set1 and not set2:
+            return 1.0
+        if not set1 or not set2:
+            return 0.0
+        
+        intersection = set1.intersection(set2)
+        union = set1.union(set2)
+        
+        return len(intersection) / len(union)

@@ -9,20 +9,40 @@ import math
 from datetime import datetime
 
 from models.transaction import TransactionData
-from config import logger
+from models.keyword_dictionary import KeywordDictionary
+from config import logger, KEYWORDS_SPREADSHEET_ID, KEYWORDS_SHEET_NAME
 
 
 class TransactionCategoryClassifier:
     """
     Класс для классификации транзакций по категориям на основе машинного обучения
     """
-    def __init__(self):
+    def __init__(self, keyword_dict: Optional[KeywordDictionary] = None):
         self.category_keywords = defaultdict(list)  # ключевые слова для каждой категории
         self.category_features = defaultdict(lambda: defaultdict(int))  # частоты признаков по категориям
         self.global_features = defaultdict(int)  # частоты признаков глобально
         self.category_transactions_count = defaultdict(int)  # количество транзакций в каждой категории
         self.total_transactions = 0
         self.categories = set()
+        
+        # Интеграция с новой системой KeywordDictionary
+        if keyword_dict is None:
+            try:
+                self.keyword_dict = KeywordDictionary(KEYWORDS_SPREADSHEET_ID, KEYWORDS_SHEET_NAME)
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось инициализировать KeywordDictionary: {e}. Создаю пустой экземпляр.")
+                # Создаем пустой экземпляр для тестирования
+                self.keyword_dict = KeywordDictionary.__new__(KeywordDictionary)
+                self.keyword_dict.spreadsheet_id = KEYWORDS_SPREADSHEET_ID
+                self.keyword_dict.sheet_name = KEYWORDS_SHEET_NAME
+                self.keyword_dict.category_keywords = {}
+                self.keyword_dict.keyword_to_category = {}
+                self.keyword_dict.bigram_to_category = {}
+                self.keyword_dict.unigram_to_categories = {}
+                self.keyword_dict.usage_stats = {}
+                self.keyword_dict.last_update = None
+        else:
+            self.keyword_dict = keyword_dict
         
     def extract_features(self, text: str) -> List[str]:
         """
@@ -165,6 +185,24 @@ class TransactionCategoryClassifier:
         Возвращает ключевые слова для указанной категории.
         """
         return self.category_keywords.get(category, [])
+
+    def get_categories_by_text(self, text: str) -> List[Tuple[str, float]]:
+        """
+        Получение потенциальных категорий по тексту с использованием KeywordDictionary
+        """
+        return self.keyword_dict.get_categories_by_text(text)
+
+    def get_category_by_keyword(self, keyword: str) -> Optional[Tuple[str, float]]:
+        """
+        Получение категории по ключевому слову с использованием KeywordDictionary
+        """
+        return self.keyword_dict.get_category_by_keyword(keyword)
+
+    def add_keyword(self, keyword: str, category: str, confidence: float = 0.5):
+        """
+        Добавление нового ключевого слова в KeywordDictionary
+        """
+        self.keyword_dict.add_keyword(keyword, category, confidence)
 
 
 # Глобальный экземпляр классификатора

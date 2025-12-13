@@ -29,6 +29,60 @@ from models.transaction import TransactionData
 # Импортируем наши кастомные исключения
 from utils.exceptions import SheetConnectionError, SheetWriteError
 
+# --- СТАРЫЙ КЛАСС GoogleSheetsClient ДЛЯ СОВМЕСТИМОСТИ ---
+class GoogleSheetsClient:
+    """Старый класс для синхронной работы с Google Sheets, используется в KeywordDictionary"""
+    def __init__(self):
+        self._gc = None
+        self._sheets = {}
+        self._last_gc_time = None
+        self._gc_timeout = 3600  # Переподключаться каждый час
+
+    def _get_client(self):
+        """Получает (или создаёт) синхронный Google Sheets клиент."""
+        import gspread
+        from config import SERVICE_KEY
+        from datetime import datetime
+        from config import logger
+
+        now = datetime.now()
+
+        # Переподключаемся если прошло > часа или клиент не инициализирован
+        if self._gc is None or (
+            self._last_gc_time and
+            (now - self._last_gc_time).total_seconds() > self._gc_timeout
+        ):
+            try:
+                self._gc = gspread.service_account(filename=SERVICE_KEY)
+                self._last_gc_time = now
+                self._sheets.clear()  # Очищаем кеш листов при переподключении
+                logger.info("✅ Переподключение к Google Sheets выполнено успешно (синхронный клиент)")
+            except Exception as e:
+                logger.error(f"❌ Критическая ошибка подключения к Google Sheets: {e}")
+                self._gc = None
+                raise e
+
+        return self._gc
+
+    def get_sheet_data(self, spreadsheet_url, sheet_name):
+        """Получает данные из указанного листа"""
+        from config import logger
+        from config import GOOGLE_SHEET_URL
+
+        # Если spreadsheet_url пустой, используем глобальный
+        if not spreadsheet_url:
+            spreadsheet_url = GOOGLE_SHEET_URL
+
+        try:
+            gc = self._get_client()
+            sh = gc.open_by_url(spreadsheet_url)
+            ws = sh.worksheet(sheet_name)
+            data = ws.get_all_values()
+            return data
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения данных из листа {sheet_name}: {e}")
+            raise e
+
 
 # --- КЕШИРОВАНИЕ КЛИЕНТОВ И РАБОЧИХ ЛИСТОВ ---
 class GoogleSheetsCache:
@@ -129,6 +183,19 @@ async def load_categories_from_sheet() -> bool:
         CATEGORY_STORAGE.last_loaded = datetime.now()
         
         logger.info(f"✅ Категории загружены. Расход: {len(CATEGORY_STORAGE.expense)}, Доход: {len(CATEGORY_STORAGE.income)}. Ключевых слов: {len(CATEGORY_STORAGE.keywords)}")
+        
+        # Обновляем KeywordDictionary после загрузки категорий
+        try:
+            # Импортируем classifier внутри функции, чтобы избежать циклического импорта
+            from utils.category_classifier import classifier
+            # Обновляем словарь ключевых слов в KeywordDictionary
+            for category, keywords in CATEGORY_STORAGE.keywords.items():
+                for keyword in keywords:
+                    classifier.add_keyword(keyword, category)
+            logger.info(f"✅ KeywordDictionary обновлен с {len(CATEGORY_STORAGE.keywords)} категориями.")
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления KeywordDictionary: {e}")
+            
         return True
 
     except Exception as e:

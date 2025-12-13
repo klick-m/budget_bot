@@ -14,13 +14,15 @@ from utils.category_classifier import TransactionCategoryClassifier
 def test_classifier_initialization():
     """Тест инициализации классификатора"""
     classifier = TransactionCategoryClassifier()
-    
+
     assert classifier.category_keywords == {}
     assert classifier.category_features == {}
     assert classifier.global_features == {}
     assert classifier.category_transactions_count == {}
     assert classifier.total_transactions == 0
     assert classifier.categories == set()
+    # Проверяем, что KeywordDictionary также инициализирован
+    assert classifier.keyword_dict is not None
 
 
 def test_extract_features():

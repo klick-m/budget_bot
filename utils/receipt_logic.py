@@ -6,12 +6,22 @@ from typing import Optional, List
 
 # Импорт из нашей структуры
 from config import CHECK_API_TOKEN, CHECK_API_URL, CHECK_API_TIMEOUT, CATEGORY_STORAGE, logger
+from utils.category_classifier import classifier
+
 from models.transaction import CheckData
 from utils.exceptions import CheckApiTimeout, CheckApiRecognitionError
 
-
 def map_category_by_keywords(search_string: str) -> str:
     """Присваивает категорию на основе ключевых слов в строке поиска."""
+    # Используем новую систему KeywordDictionary для определения категории
+    result = classifier.get_category_by_keyword(search_string)
+    if result:
+        category, confidence = result
+        # Проверяем, что категория существует в списке расходов
+        if category in CATEGORY_STORAGE.expense:
+            return category
+    
+    # Если новая система не дала результата, используем старую логику
     normalized_comment = search_string.lower()
     
     # Ищем совпадения по ключевым словам в хранилище CATEGORY_STORAGE
