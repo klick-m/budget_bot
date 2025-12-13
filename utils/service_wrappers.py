@@ -2,6 +2,7 @@
 from aiogram import Bot, types
 from aiogram.exceptions import TelegramBadRequest
 from config import logger
+from aiogram.types import ReplyKeyboardMarkup
 
 async def safe_answer(callback: types.CallbackQuery):
     """
@@ -16,9 +17,19 @@ async def safe_answer(callback: types.CallbackQuery):
 
 async def edit_or_send(bot: Bot, message: types.Message, text: str, **kwargs):
     """
-    Пытается отредактировать сообщение, в случае неудачи (например, если сообщение слишком старое) 
+    Пытается отредактировать сообщение, в случае неудачи (например, если сообщение слишком старое)
     отправляет новое сообщение.
     """
+    # Проверяем, является ли reply_markup экземпляром ReplyKeyboardMarkup
+    reply_markup = kwargs.get('reply_markup')
+    if isinstance(reply_markup, ReplyKeyboardMarkup):
+        # Нельзя редактировать сообщение с ReplyKeyboardMarkup, сразу отправляем новое
+        return await bot.send_message(
+            chat_id=message.chat.id,
+            text=text,
+            **kwargs
+        )
+    
     # 1. Сначала пытаемся отредактировать
     if message.message_id:
         try:
@@ -31,11 +42,11 @@ async def edit_or_send(bot: Bot, message: types.Message, text: str, **kwargs):
         except TelegramBadRequest as e:
             # 2. Если редактирование не удалось из-за старости сообщения, отправляем новое
             logger.warning(f"Failed to edit message {message.message_id}: {e}. Sending new message.")
-            pass 
+            pass
         except AttributeError:
             # На всякий случай, если message_id не найден
             pass
-    
+     
     # 3. Отправляем новое сообщение, если редактирование не прошло
     return await bot.send_message(
         chat_id=message.chat.id,

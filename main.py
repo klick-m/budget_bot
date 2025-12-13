@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 
 # Импортируем из нашей новой структуры
-from config import BOT_TOKEN, logger
+from config import BOT_TOKEN, logger, DATA_SHEET_NAME
 from handlers.transactions import (
     command_start_handler,
     test_sheets_handler,
@@ -24,10 +24,14 @@ from handlers.transactions import (
     AllowedUsersFilter,
     Transaction
 )
-from handlers.transactions import register_draft_handlers
+from handlers.transactions import register_draft_handlers, register_text_parser_handler, register_confirmation_handlers
 from sheets.client import load_categories_from_sheet
 from utils.keyboards import get_main_keyboard, HistoryCallbackData
 from aiogram.types import BotCommand, MenuButtonWebApp
+
+# Импорты для Local First архитектуры
+from services.repository import TransactionRepository
+from services.sync_worker import start_sync_worker
 
 
 # 2. Инициализация Бота и Диспетчера
@@ -84,28 +88,44 @@ async def main():
         logger.error("❌ Невозможно запустить: BOT_TOKEN не найден.")
         return
     
+    # Инициализация репозитория и синхронизация
+    transaction_repository = TransactionRepository()
+    await transaction_repository.init_db()
+    
     logger.info("Загрузка категорий из Google Sheets...")
     if not await load_categories_from_sheet():
          logger.error("❌ Критическая ошибка: Не удалось загрузить категории. Бот не будет запущен.")
          return
-    
+     
     register_handlers(dp)
     register_draft_handlers(dp)
-    
-    # Удален вызов set_default_commands, так как команды теперь отображаются в inline-клавиатуре
-        
+    register_text_parser_handler(dp)
+    register_confirmation_handlers(dp)
+     
+    # Запуск фонового воркера синхронизации
+    from sheets.client import get_google_sheet_client
+    sheets_client = await get_google_sheet_client(DATA_SHEET_NAME)
+    sync_task = asyncio.create_task(start_sync_worker(bot, transaction_repository, sheets_client))
+     
     logger.info("🚀 Бот запущен! Ожидание команд...")
-    
+     
     # Устанавливаем основную Reply клавиатуру, чтобы она была доступна
     # В aiogram 3+ MenuButtonWebApp не используется для обычной ReplyKeyboardMarkup,
     # мы просто запускаем start_polling. ReplyKeyboardMarkup будет отображена после /start.
-    
+     
     try:
         await dp.start_polling(bot)
     except asyncio.CancelledError:
         logger.info("Бот остановлен пользователем")
     except KeyboardInterrupt:
         logger.info("Бот остановлен пользователем")
+    finally:
+        # Остановка задачи синхронизации при завершении
+        sync_task.cancel()
+        try:
+            await sync_task
+        except asyncio.CancelledError:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(main())

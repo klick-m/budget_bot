@@ -23,6 +23,8 @@ from utils.receipt_logic import parse_check_from_api, extract_learnable_keywords
 from utils.category_classifier import classifier
 from utils.keyboards import get_history_keyboard, HistoryCallbackData
 from sheets.client import get_latest_transactions
+from services.repository import TransactionRepository
+from services.text_parser import parse_transaction_text
 from aiogram.filters import Command, CommandObject
 
 
@@ -53,11 +55,13 @@ class Transaction(StatesGroup):
     choosing_type = State()
     choosing_category = State()
     choosing_category_after_check = State()
-    confirming_check = State()  # Подтверждение чека после выбора категории вручную
+    confirming_check = State()  # Подтверждение чека после выбора категории вручно
     confirming_auto_check = State()  # Подтверждение автоматически распознанного чека
     entering_amount = State()
     entering_comment = State()
     editing_draft = State()  # Новое состояние для управления черновиком
+    waiting_for_confirmation = State()  # Состояние ожидания подтверждения транзакции
+    waiting_for_category_selection = State()  # Состояние ожидания выбора категории
 
 
 # --- B. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -1175,4 +1179,113 @@ def register_draft_handlers(dp: Dispatcher):
     # Обработчики ввода текста для черновика
     dp.message.register(handle_amount_entry_draft, Transaction.entering_amount, F.text, AllowedUsersFilter())
     dp.message.register(handle_comment_entry_draft, Transaction.entering_comment, F.text, AllowedUsersFilter())
+
+
+async def parse_transaction_handler(message: types.Message, state: FSMContext):
+    """Handle plain text messages to parse and save transactions."""
+    print(f"DEBUG: Handler triggered for: {message.text}")
+    text = message.text.strip()
+    
+    # Parse the transaction text
+    parsed = parse_transaction_text(text)
+    amount = parsed['amount']
+    description = parsed['category']  # raw_category from parser becomes description
+    
+    # Validate amount
+    if amount is None or amount <= 0:
+        await message.answer("❌ Не удалось распознать сумму в тексте. Отправьте сообщение в формате 'сумма категория' (например, '300 кофе').")
+        return
+    
+    # Predict category using the classifier
+    predicted_category = classifier.get_category_by_keyword(description)
+    if predicted_category:
+        category = predicted_category[0]  # Get the category from the tuple
+    else:
+        # If prediction fails, use the raw description as category
+        category = description if description else "Без категории"
+    
+    # Store transaction data in FSM state
+    await state.update_data(
+        amount=amount,
+        category=category,
+        description=description
+    )
+    
+    # Create confirmation message
+    confirmation_text = f"💰 Сумма: {amount}\n" \
+                        f"📂 Категория: {category}\n" \
+                        f"📝 Описание: {description}\n\n" \
+                        f"Сохранить?"
+    
+    # Create inline keyboard with options
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            types.InlineKeyboardButton(text="✅ Сохранить", callback_data="save_tx"),
+            types.InlineKeyboardButton(text="📂 Изменить категорию", callback_data="change_cat_tx")
+        ],
+        [
+            types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_tx")
+        ]
+    ])
+    
+    # Send confirmation message
+    await message.answer(confirmation_text, reply_markup=keyboard)
+    
+    # Set state to waiting for confirmation
+    await state.set_state(Transaction.waiting_for_confirmation)
+
+
+def register_text_parser_handler(dp: Dispatcher):
+    """Register the text parser handler."""
+    dp.message.register(parse_transaction_handler, F.text, StateFilter("*"), ~F.text.startswith('/'), AllowedUsersFilter())
+
+
+async def handle_save_tx(callback: types.CallbackQuery, state: FSMContext):
+    """Handle saving transaction after confirmation."""
+    await safe_answer(callback)
+    
+    # Get transaction data from state
+    data = await state.get_data()
+    amount = data.get('amount')
+    category = data.get('category')
+    description = data.get('description')
+    user_id = callback.from_user.id
+    
+    # Create repository instance and save transaction
+    repo = TransactionRepository()
+    await repo.add_transaction(user_id, amount, category, description)
+    
+    # Clear state
+    await state.clear()
+    
+    # Edit message to confirm saving
+    await callback.message.edit_text("✅ Транзакция сохранена!")
+
+
+async def handle_cancel_tx(callback: types.CallbackQuery, state: FSMContext):
+    """Handle canceling transaction."""
+    await safe_answer(callback)
+    
+    # Clear state
+    await state.clear()
+    
+    # Edit message to confirm cancellation
+    await callback.message.edit_text("❌ Отменено.")
+
+
+async def handle_change_category(callback: types.CallbackQuery, state: FSMContext):
+    """Handle changing category."""
+    await safe_answer(callback)
+    
+    # Ask user to select a new category
+    await callback.message.answer("Выберите категорию:")
+    await state.set_state(Transaction.waiting_for_category_selection)
+
+
+# Register the new callback handlers
+def register_confirmation_handlers(dp: Dispatcher):
+    """Register confirmation handlers."""
+    dp.callback_query.register(handle_save_tx, F.data == "save_tx", Transaction.waiting_for_confirmation)
+    dp.callback_query.register(handle_cancel_tx, F.data == "cancel_tx", Transaction.waiting_for_confirmation)
+    dp.callback_query.register(handle_change_category, F.data == "change_cat_tx", Transaction.waiting_for_confirmation)
     
