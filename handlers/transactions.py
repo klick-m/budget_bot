@@ -1199,10 +1199,10 @@ async def parse_transaction_handler(message: types.Message, state: FSMContext):
     # Predict category using the classifier
     predicted_category = classifier.get_category_by_keyword(description)
     if predicted_category:
-        category = predicted_category[0]  # Get the category from the tuple
+        category = predicted_category[0] # Get the category from the tuple
     else:
-        # If prediction fails, use the raw description as category
-        category = description if description else "Без категории"
+        # If prediction fails, use the raw description and let the classifier validate it
+        category = classifier.predict(description)  # This will return a valid category or "Другое"
     
     # Store transaction data in FSM state
     await state.update_data(
@@ -1237,7 +1237,8 @@ async def parse_transaction_handler(message: types.Message, state: FSMContext):
 
 def register_text_parser_handler(dp: Dispatcher):
     """Register the text parser handler."""
-    dp.message.register(parse_transaction_handler, F.text, StateFilter("*"), ~F.text.startswith('/'), AllowedUsersFilter())
+    # Register with a filter to exclude the category selection state
+    dp.message.register(parse_transaction_handler, F.text, ~StateFilter(Transaction.waiting_for_category_selection), ~F.text.startswith('/'), AllowedUsersFilter())
 
 
 async def handle_save_tx(callback: types.CallbackQuery, state: FSMContext):
@@ -1277,9 +1278,92 @@ async def handle_change_category(callback: types.CallbackQuery, state: FSMContex
     """Handle changing category."""
     await safe_answer(callback)
     
+    # Get available categories
+    from config import CATEGORY_STORAGE
+    category_list = CATEGORY_STORAGE.expense  # Assuming expense categories for this flow
+    
+    # Create ReplyKeyboard with available categories
+    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+    
+    # Create buttons in rows of 2
+    keyboard_buttons = []
+    for i in range(0, len(category_list), 2):
+        row = [KeyboardButton(text=cat) for cat in category_list[i:i+2]]
+        keyboard_buttons.append(row)
+    
+    # Add a 'Cancel' button
+    keyboard_buttons.append([KeyboardButton(text="❌ Отмена")])
+    
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=keyboard_buttons,
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    
     # Ask user to select a new category
-    await callback.message.answer("Выберите категорию:")
+    await callback.message.answer("Выберите новую категорию:", reply_markup=keyboard)
     await state.set_state(Transaction.waiting_for_category_selection)
+
+
+# Add handler for category selection
+async def handle_category_selection(message: types.Message, state: FSMContext):
+    """Handle category selection from reply keyboard."""
+    selected_category = message.text
+    
+    # Check if user wants to cancel
+    if selected_category == "❌ Отмена":
+        # Clear the state and send cancellation message
+        await state.clear()
+        await message.answer("❌ Выбор категории отменен.", reply_markup=get_main_keyboard())
+        return
+    
+    # Get available categories to validate selection
+    from config import CATEGORY_STORAGE
+    available_categories = CATEGORY_STORAGE.expense  # Assuming expense categories for this flow
+    
+    # Check if selected category is valid
+    if selected_category not in available_categories:
+        await message.answer("❌ Пожалуйста, выберите категорию из предложенных вариантов.")
+        return
+    
+    # Update FSM data with selected category
+    await state.update_data(category=selected_category)
+    
+    # Call the function to send transaction summary (go back to confirmation)
+    await send_transaction_summary(message, state)
+
+
+# Function to send transaction summary (reusable)
+async def send_transaction_summary(message: types.Message, state: FSMContext):
+    """Send transaction summary and confirmation buttons."""
+    # Get the transaction data to create confirmation message
+    data = await state.get_data()
+    amount = data.get('amount')
+    description = data.get('description', '')
+    category = data.get('category', 'Не указана')
+    
+    # Create confirmation message
+    confirmation_text = f"💰 Сумма: {amount}\n" \
+                        f"📂 Категория: {category}\n" \
+                        f"📝 Описание: {description}\n\n" \
+                        f"Сохранить?"
+    
+    # Create inline keyboard with options
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            types.InlineKeyboardButton(text="✅ Сохранить", callback_data="save_tx"),
+            types.InlineKeyboardButton(text="📂 Изменить категорию", callback_data="change_cat_tx")
+        ],
+        [
+            types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_tx")
+        ]
+    ])
+    
+    # Send confirmation message with inline keyboard (replacing the reply keyboard)
+    await message.answer(confirmation_text, reply_markup=keyboard)
+    
+    # Set state back to waiting for confirmation
+    await state.set_state(Transaction.waiting_for_confirmation)
 
 
 # Register the new callback handlers
@@ -1288,4 +1372,6 @@ def register_confirmation_handlers(dp: Dispatcher):
     dp.callback_query.register(handle_save_tx, F.data == "save_tx", Transaction.waiting_for_confirmation)
     dp.callback_query.register(handle_cancel_tx, F.data == "cancel_tx", Transaction.waiting_for_confirmation)
     dp.callback_query.register(handle_change_category, F.data == "change_cat_tx", Transaction.waiting_for_confirmation)
+    # Register the new message handler for category selection
+    dp.message.register(handle_category_selection, Transaction.waiting_for_category_selection, F.text, AllowedUsersFilter())
     

@@ -204,6 +204,51 @@ class TransactionCategoryClassifier:
         """
         self.keyword_dict.add_keyword(keyword, category, confidence)
 
+    def predict(self, text: str) -> str:
+        """
+        Предсказание категории для текста с проверкой на валидность категории.
+        Возвращает только валидные категории из известных или "Другое" по умолчанию.
+        """
+        # Сначала пробуем найти категорию по ключевым словам
+        keyword_result = self.get_category_by_keyword(text)
+        if keyword_result:
+            category, confidence = keyword_result
+            # Проверяем, что категория валидна (существует в системе)
+            if category in self.categories or self._is_valid_category(category):
+                return category
+        
+        # Если по ключевым словам не нашли, пробуем ML-классификацию
+        # Но перед этим создаем фейковую транзакцию для использования существующей логики
+        from models.transaction import TransactionData
+        fake_transaction = TransactionData(
+            type="Расход",
+            category="",  # Пока не знаем
+            amount=0.0,
+            comment=text,
+            username="",
+            retailer_name="",
+            items_list="",
+            payment_info="",
+            transaction_dt=datetime.now()
+        )
+        
+        predicted_category, confidence = self.predict_category(fake_transaction)
+        
+        # Проверяем, что предсказанная категория валидна
+        if predicted_category in self.categories or self._is_valid_category(predicted_category):
+            return predicted_category
+        else:
+            # Если категория не валидна, возвращаем "Другое" или "Не распознано"
+            return "Другое"
+    
+    def _is_valid_category(self, category: str) -> bool:
+        """
+        Проверяет, является ли категория валидной (существует в системе).
+        """
+        # Проверяем, есть ли категория в известных категориях или в KeywordDictionary
+        return (category in self.categories or
+                category in self.keyword_dict.category_keywords if hasattr(self.keyword_dict, 'category_keywords') else True)
+
 
 # Глобальный экземпляр классификатора
 classifier = TransactionCategoryClassifier()
