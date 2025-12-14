@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 
 # Импортируем из нашей новой структуры
-from config import BOT_TOKEN, logger, DATA_SHEET_NAME
+from config import BOT_TOKEN, logger, DATA_SHEET_NAME, CATEGORY_STORAGE
 from handlers.transactions import (
     command_start_handler,
     test_sheets_handler,
@@ -96,6 +96,7 @@ async def main():
     if not await load_categories_from_sheet():
          logger.error("❌ Критическая ошибка: Не удалось загрузить категории. Бот не будет запущен.")
          return
+    logger.info(f"Категории загружены. Расход: {len(CATEGORY_STORAGE.expense)}, Доход: {len(CATEGORY_STORAGE.income)}.")
          
     # Инициализируем classifier после загрузки категорий
     from utils.category_classifier import classifier

@@ -297,7 +297,8 @@ async def handle_photo(message: types.Message, state: FSMContext):
 
     status_msg = await message.answer("⏳ **Чек получен.** Отправка изображения в API Proverkacheka.com...")
     
-    # 0. Перезагружаем категории из Google Sheets чтобы использовать актуальные ключевые слова
+    # 0. Загружаем категории из Google Sheets с кэшированием, чтобы использовать актуальные ключевые слова
+    # Загрузка происходит с кэшированием, поэтому не будет частых обращений к API
     await load_categories_from_sheet()
     
     file_info = await message.bot.get_file(file_object.file_id)

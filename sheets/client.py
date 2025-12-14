@@ -6,7 +6,7 @@
 # sheets/client.py
 import asyncio
 import gspread
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from functools import lru_cache
 
@@ -75,14 +75,31 @@ class GoogleSheetsClient:
             spreadsheet_url = GOOGLE_SHEET_URL
 
         try:
+            # Проверяем, есть ли закэшированные данные в новом кэше
+            cached_data = _sheets_cache.get_cached_data(sheet_name)
+            if cached_data is not None:
+                return cached_data
+
             gc = self._get_client()
             sh = gc.open_by_url(spreadsheet_url)
             ws = sh.worksheet(sheet_name)
             # Используем batch-запрос для получения всех значений за один вызов API
             data = ws.get_all_values()
+            # Кэшируем данные в новом кэше
+            _sheets_cache.cache_data(sheet_name, data)
             return data
         except Exception as e:
-            logger.error(f"❌ Ошибка получения данных из листа {sheet_name}: {e}")
+            # Проверяем, является ли ошибка ошибкой превышения квоты
+            is_rate_limit = False
+            if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
+                is_rate_limit = True
+            elif "429" in str(e) or "quota" in str(e).lower() or "RATE_LIMIT_EXCEEDED" in str(e):
+                is_rate_limit = True
+
+            if is_rate_limit:
+                logger.warning(f"Превышена квота Google API при получении данных из листа {sheet_name}: {e}")
+            else:
+                logger.error(f"❌ Ошибка получения данных из листа {sheet_name}: {e}")
             raise e
 
 
@@ -94,6 +111,10 @@ class GoogleSheetsCache:
         self._sheets: Dict[str, gspread.Worksheet] = {}
         self._last_gc_time = None
         self._gc_timeout = 3600  # Переподключаться каждый час
+        # Добавляем кэш для данных с TTL
+        self._data_cache: Dict[str, Dict] = {}
+        self._cache_timestamps: Dict[str, datetime] = {}
+        self._cache_ttl_seconds = 300  # 5 минут TTL для кэша данных
     
     async def get_client(self):
         """Получает (или создаёт) кешированный Google Sheets клиент."""
@@ -138,13 +159,19 @@ class GoogleSheetsCache:
                         is_rate_limit = False
                         if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
                             is_rate_limit = True
-                        elif "429" in str(e) or "quota" in str(e).lower():
+                        elif "429" in str(e) or "quota" in str(e).lower() or "RATE_LIMIT_EXCEEDED" in str(e):
                             is_rate_limit = True
 
                         if is_rate_limit:
-                            wait_time = base_delay * (attempt + 1) * 2  # Увеличиваем задержку
+                            # Используем экспоненциальную задержку с jitter
+                            base_wait = base_delay * (2 ** attempt)  # Экспоненциальная задержка
+                            import random
+                            jitter = random.uniform(0, base_wait * 0.1)  # Добавляем небольшой jitter
+                            wait_time = base_wait + jitter
+                            
                             # CRITICAL: Log this so the user knows the bot is NOT frozen
-                            print(f"⚠️ Google API Quota exceeded (429). Waiting {wait_time}s before retry {attempt+1}/{retries}...")
+                            print(f"⚠️ Google API Quota exceeded (429). Waiting {wait_time:.2f}s before retry {attempt+1}/{retries}...")
+                            logger.warning(f"Google API Quota exceeded (429). Waiting {wait_time:.2f}s before retry {attempt+1}/{retries}...")
                             await asyncio.sleep(wait_time)
                         else:
                             # If it's a real error (e.g. Sheet not found), raise it immediately
@@ -161,6 +188,23 @@ class GoogleSheetsCache:
         
         return self._sheets[sheet_name]
 
+    def _is_cache_valid(self, sheet_name: str) -> bool:
+        """Проверяет, действителен ли кэш для указанного листа."""
+        if sheet_name not in self._cache_timestamps:
+            return False
+        return (datetime.now() - self._cache_timestamps[sheet_name]).total_seconds() < self._cache_ttl_seconds
+
+    def get_cached_data(self, sheet_name: str) -> Optional[List]:
+        """Получает закэшированные данные для указанного листа."""
+        if self._is_cache_valid(sheet_name):
+            return self._data_cache.get(sheet_name)
+        return None
+
+    def cache_data(self, sheet_name: str, data: List):
+        """Кэширует данные для указанного листа."""
+        self._data_cache[sheet_name] = data
+        self._cache_timestamps[sheet_name] = datetime.now()
+
 # Глобальный кеш (один на приложение)
 _sheets_cache = GoogleSheetsCache()
 
@@ -172,25 +216,43 @@ async def get_google_sheet_client(sheet_name: str) -> gspread.Worksheet:
     except SheetConnectionError:
         raise
 
+async def get_sheet_data_with_cache(sheet_name: str) -> List:
+    """Получает данные из листа с использованием кэширования."""
+    # Проверяем, есть ли закэшированные данные
+    cached_data = _sheets_cache.get_cached_data(sheet_name)
+    if cached_data is not None:
+        return cached_data
+
+    # Если данных нет в кэше, получаем их из Google Sheets
+    try:
+        ws = await get_google_sheet_client(sheet_name)
+        data = await asyncio.to_thread(ws.get_all_values)
+    except Exception as e:
+        # Проверяем, является ли ошибка ошибкой превышения квоты
+        is_rate_limit = False
+        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
+            is_rate_limit = True
+        elif "429" in str(e) or "quota" in str(e).lower() or "RATE_LIMIT_EXCEEDED" in str(e):
+            is_rate_limit = True
+
+        if is_rate_limit:
+            logger.warning(f"Превышена квота Google API при получении данных из листа {sheet_name}: {e}")
+            # В случае ошибки квоты, возвращаем пустой список вместо падения
+            return []
+        else:
+            logger.error(f"❌ Ошибка при получении данных из листа {sheet_name}: {e}")
+            raise
+
+    # Кэшируем данные
+    _sheets_cache.cache_data(sheet_name, data)
+    return data
+
 
 async def load_categories_from_sheet() -> bool:
     """Загружает списки категорий и ключевые слова в CATEGORY_STORAGE."""
-    max_retries = 3
-    retry_count = 0
-    
-    while retry_count < max_retries:
-        try:
-            ws = await get_google_sheet_client(CATEGORIES_SHEET_NAME)
-            break
-        except SheetConnectionError:
-            retry_count += 1
-            if retry_count >= max_retries:
-                return False
-            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
-
     try:
-        # Выполняем синхронную операцию в отдельном потоке
-        all_values = await asyncio.to_thread(ws.get_all_values)
+        # Получаем данные с использованием кэширования
+        all_values = await get_sheet_data_with_cache(CATEGORIES_SHEET_NAME)
 
         # Очищаем хранилище перед обновлением
         CATEGORY_STORAGE.expense.clear()
@@ -225,7 +287,7 @@ async def load_categories_from_sheet() -> bool:
             for category, keywords in CATEGORY_STORAGE.keywords.items():
                 try:
                     for keyword in keywords:
-                        classifier.add_keyword(keyword, category)
+                        classifier.add_keyword(keyword, category, save_to_sheet=False)
                 except (KeyError, ValueError) as e:
                     logger.warning(f"⚠️ Категория mapping failed для '{category}', используем raw string: {e}")
                     # Продолжаем с другими категориями
@@ -237,7 +299,17 @@ async def load_categories_from_sheet() -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"❌ Ошибка обработки данных категорий: {e}")
+        # Проверяем, является ли ошибка ошибкой превышения квоты
+        is_rate_limit = False
+        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
+            is_rate_limit = True
+        elif "429" in str(e) or "quota" in str(e).lower() or "RATE_LIMIT_EXCEEDED" in str(e):
+            is_rate_limit = True
+
+        if is_rate_limit:
+            logger.warning(f"Превышена квота Google API при загрузке категорий: {e}")
+        else:
+            logger.error(f"❌ Ошибка обработки данных категорий: {e}")
         return False
 
 
@@ -277,13 +349,33 @@ async def write_transaction(transaction: TransactionData):
         try:
             # Используем append_rows вместо append_row - это быстрее! (Пункт 9 в рекомендациях)
             await asyncio.to_thread(ws.append_rows, [row])
+            # Инвалидируем кэш данных транзакций, так как данные изменились
+            if DATA_SHEET_NAME in _sheets_cache._data_cache:
+                del _sheets_cache._data_cache[DATA_SHEET_NAME]
+            if DATA_SHEET_NAME in _sheets_cache._cache_timestamps:
+                del _sheets_cache._cache_timestamps[DATA_SHEET_NAME]
             break
         except Exception as e:
-            retry_count += 1
-            if retry_count >= max_retries:
+            # Проверяем, является ли ошибка ошибкой превышения квоты
+            is_rate_limit = False
+            if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
+                is_rate_limit = True
+            elif "429" in str(e) or "quota" in str(e).lower() or "RATE_LIMIT_EXCEEDED" in str(e):
+                is_rate_limit = True
+
+            if is_rate_limit:
+                logger.warning(f"Превышена квота Google API при записи транзакции: {e}")
+                # Используем экспоненциальную задержку с jitter
+                import random
+                base_delay = 10 # базовая задержка
+                wait_time = base_delay * (2 ** retry_count) + random.uniform(0, base_delay * 0.1)
+                await asyncio.sleep(wait_time)
+            else:
                 logger.error(f"❌ Ошибка записи транзакции: {e}")
-                raise SheetWriteError(f"Не удалось записать транзакцию в Sheets: {e}")
-            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
+                retry_count += 1
+                if retry_count >= max_retries:
+                    raise SheetWriteError(f"Не удалось записать транзакцию в Sheets: {e}")
+                await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
 
 
 async def add_keywords_to_sheet(category: str, new_keywords: List[str]) -> bool:
@@ -345,6 +437,9 @@ async def add_keywords_to_sheet(category: str, new_keywords: List[str]) -> bool:
                     if k not in CATEGORY_STORAGE.keywords[category]:
                         CATEGORY_STORAGE.keywords[category].append(k)
 
+                # Инвалидируем кэш категорий, так как данные изменились
+                invalidate_categories_cache()
+
                 logger.info(f"✅ Добавлено {len(unique_new_keywords)} новых ключевых слов к категории '{category}'.")
                 return True
         except gspread.exceptions.CellNotFound:
@@ -357,7 +452,17 @@ async def add_keywords_to_sheet(category: str, new_keywords: List[str]) -> bool:
     except SheetConnectionError:
         return False
     except Exception as e:
-        logger.error(f"❌ Ошибка при добавлении ключевых слов в Google Sheets: {e}")
+        # Проверяем, является ли ошибка ошибкой превышения квоты
+        is_rate_limit = False
+        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
+            is_rate_limit = True
+        elif "429" in str(e) or "quota" in str(e).lower() or "RATE_LIMIT_EXCEEDED" in str(e):
+            is_rate_limit = True
+
+        if is_rate_limit:
+            logger.warning(f"Превышена квота Google API при добавлении ключевых слов: {e}")
+        else:
+            logger.error(f"❌ Ошибка при добавлении ключевых слов в Google Sheets: {e}")
         return False
 
 
@@ -366,22 +471,9 @@ async def get_latest_transactions(user_id: str, limit: int = 5, offset: int = 0)
     Извлекает последние limit транзакций пользователя user_id из таблицы RawData,
     начиная со смещения offset. Функция возвращает список словарей.
     """
-    max_retries = 3
-    retry_count = 0
-    
-    while retry_count < max_retries:
-        try:
-            ws = await get_google_sheet_client(DATA_SHEET_NAME)
-            break
-        except SheetConnectionError as e:
-            retry_count += 1
-            if retry_count >= max_retries:
-                raise SheetConnectionError(f"Не удалось подключиться к Google Sheets после {max_retries} попыток: {e}")
-            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
-
     try:
-        # Получаем все значения из таблицы
-        all_values = await asyncio.to_thread(ws.get_all_values)
+        # Получаем данные с использованием кэширования
+        all_values = await get_sheet_data_with_cache(DATA_SHEET_NAME)
         
         # Пропускаем заголовок (если он есть)
         if all_values and len(all_values) > 0:
@@ -430,7 +522,17 @@ async def get_latest_transactions(user_id: str, limit: int = 5, offset: int = 0)
         return paginated_transactions
 
     except Exception as e:
-        logger.error(f"❌ Ошибка при получении транзакций пользователя {user_id}: {e}")
+        # Проверяем, является ли ошибка ошибкой превышения квоты
+        is_rate_limit = False
+        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
+            is_rate_limit = True
+        elif "429" in str(e) or "quota" in str(e).lower() or "RATE_LIMIT_EXCEEDED" in str(e):
+            is_rate_limit = True
+
+        if is_rate_limit:
+            logger.warning(f"Превышена квота Google API при получении транзакций: {e}")
+        else:
+            logger.error(f"❌ Ошибка при получении транзакций пользователя {user_id}: {e}")
         return []
 
 
@@ -458,10 +560,34 @@ async def add_keyword_to_sheet(keyword: str, category: str, confidence: float = 
         # Добавляем строку в таблицу
         await asyncio.to_thread(ws.append_rows, [row])
         
+        # Инвалидируем кэш ключевых слов, так как данные изменились
+        if KEYWORDS_SHEET_NAME in _sheets_cache._data_cache:
+            del _sheets_cache._data_cache[KEYWORDS_SHEET_NAME]
+        if KEYWORDS_SHEET_NAME in _sheets_cache._cache_timestamps:
+            del _sheets_cache._cache_timestamps[KEYWORDS_SHEET_NAME]
+        
         logger.info(f"✅ Ключевое слово '{keyword}' добавлено в таблицу '{KEYWORDS_SHEET_NAME}' с категорией '{category}'.")
         return True
         
     except Exception as e:
-        logger.error(f"❌ Ошибка при добавлении ключевого слова в Google Sheets: {e}")
+        # Проверяем, является ли ошибка ошибкой превышения квоты
+        is_rate_limit = False
+        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
+            is_rate_limit = True
+        elif "429" in str(e) or "quota" in str(e).lower() or "RATE_LIMIT_EXCEEDED" in str(e):
+            is_rate_limit = True
+
+        if is_rate_limit:
+            logger.warning(f"Превышена квота Google API при добавлении ключевого слова: {e}")
+        else:
+            logger.error(f"❌ Ошибка при добавлении ключевого слова в Google Sheets: {e}")
         return False
+
+# Обновляем кэш после добавления ключевых слов
+def invalidate_categories_cache():
+    """Инвалидирует кэш данных для листа категорий."""
+    if CATEGORIES_SHEET_NAME in _sheets_cache._data_cache:
+        del _sheets_cache._data_cache[CATEGORIES_SHEET_NAME]
+    if CATEGORIES_SHEET_NAME in _sheets_cache._cache_timestamps:
+        del _sheets_cache._cache_timestamps[CATEGORIES_SHEET_NAME]
 

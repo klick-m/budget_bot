@@ -33,11 +33,11 @@ class TransactionCategoryClassifier:
                 self.keyword_dict = KeywordDictionary.__new__(KeywordDictionary)
                 self.keyword_dict.spreadsheet_id = KEYWORDS_SPREADSHEET_ID
                 self.keyword_dict.sheet_name = KEYWORDS_SHEET_NAME
-                self.keyword_dict.category_keywords = {}
+                self.keyword_dict.category_keywords = defaultdict(list)
                 self.keyword_dict.keyword_to_category = {}
                 self.keyword_dict.bigram_to_category = {}
                 self.keyword_dict.unigram_to_categories = {}
-                self.keyword_dict.usage_stats = {}
+                self.keyword_dict.usage_stats = Counter()
                 self.keyword_dict.last_update = None
                 self.keyword_dict.sheets_client = None
                 # Инициализируем KeywordDictionary асинхронно
@@ -56,11 +56,11 @@ class TransactionCategoryClassifier:
                 self.keyword_dict = KeywordDictionary.__new__(KeywordDictionary)
                 self.keyword_dict.spreadsheet_id = KEYWORDS_SPREADSHEET_ID
                 self.keyword_dict.sheet_name = KEYWORDS_SHEET_NAME
-                self.keyword_dict.category_keywords = {}
+                self.keyword_dict.category_keywords = defaultdict(list)
                 self.keyword_dict.keyword_to_category = {}
                 self.keyword_dict.bigram_to_category = {}
                 self.keyword_dict.unigram_to_categories = {}
-                self.keyword_dict.usage_stats = {}
+                self.keyword_dict.usage_stats = Counter()
                 self.keyword_dict.last_update = None
         else:
             self.keyword_dict = keyword_dict
@@ -69,11 +69,24 @@ class TransactionCategoryClassifier:
         """Асинхронная инициализация KeywordDictionary"""
         await asyncio.sleep(2)  # Задержка перед инициализацией
         try:
-            self.keyword_dict = KeywordDictionary(KEYWORDS_SPREADSHEET_ID, KEYWORDS_SHEET_NAME)
+            # Используем асинхронную инициализацию
+            self.keyword_dict = KeywordDictionary.__new__(KeywordDictionary)
+            self.keyword_dict.spreadsheet_id = KEYWORDS_SPREADSHEET_ID
+            self.keyword_dict.sheet_name = KEYWORDS_SHEET_NAME
+            self.keyword_dict.category_keywords = defaultdict(list)
+            self.keyword_dict.keyword_to_category = {}
+            self.keyword_dict.bigram_to_category = {}
+            self.keyword_dict.unigram_to_categories = {}
+            self.keyword_dict.usage_stats = Counter()
+            self.keyword_dict.last_update = None
+            
+            # Вызываем асинхронную инициализацию
+            asyncio.create_task(self.keyword_dict.async_load_from_sheets())
+            
         except Exception as e:
             logger.error(f"❌ Ошибка при инициализации KeywordDictionary: {e}")
             
-    # Удаляем старый метод delayed_init, так как он заменен на async_init
+   # Удаляем старый метод delayed_init, так как он заменен на async_init
         
     def extract_features(self, text: str) -> List[str]:
         """
@@ -229,11 +242,11 @@ class TransactionCategoryClassifier:
         """
         return self.keyword_dict.get_category_by_keyword(keyword)
 
-    def add_keyword(self, keyword: str, category: str, confidence: float = 0.5):
+    def add_keyword(self, keyword: str, category: str, confidence: float = 0.5, save_to_sheet: bool = True):
         """
         Добавление нового ключевого слова в KeywordDictionary
         """
-        self.keyword_dict.add_keyword(keyword, category, confidence)
+        self.keyword_dict.add_keyword(keyword, category, confidence, save_to_sheet=save_to_sheet)
 
     def learn_keyword(self, text: str, category: str):
         """

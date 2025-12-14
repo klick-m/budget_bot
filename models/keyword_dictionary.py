@@ -57,7 +57,16 @@ class KeywordDictionary:
         self.last_update: Optional[datetime] = None
         
         # Загружаем данные при инициализации
-        self.load_from_sheets()
+        # Используем асинхронную загрузку с кэшированием
+        import asyncio
+        try:
+            # Проверяем, запущен ли уже цикл
+            loop = asyncio.get_running_loop()
+            # Если цикл запущен, создаем задачу
+            asyncio.create_task(self.async_load_from_sheets())
+        except RuntimeError:
+            # Если цикл не запущен, инициализируем синхронно
+            asyncio.run(self.async_load_from_sheets())
     
     def load_from_sheets(self):
         """Загрузка данных из Google Sheets"""
@@ -116,10 +125,78 @@ class KeywordDictionary:
             
         except Exception as e:
             print(f"Ошибка при загрузке данных из Google Sheets: {e}")
-    
+
+    async def async_load_from_sheets(self):
+        """Асинхронная загрузка данных из Google Sheets с использованием кэширования"""
+        try:
+            # Импортируем асинхронный клиент
+            from sheets.client import get_sheet_data_with_cache
+            # Получаем данные с использованием кэширования
+            data = await get_sheet_data_with_cache(self.sheet_name)
+            
+            # Очищаем текущие данные
+            self.category_keywords.clear()
+            self.keyword_to_category.clear()
+            self.bigram_to_category.clear()
+            self.unigram_to_categories.clear()
+            
+            # Обрабатываем полученные данные (все в памяти, без дополнительных API-вызовов)
+            for row in data:
+                if len(row) >= 3:  # Убедимся, что есть все необходимые столбцы
+                    keyword = row[0].strip().lower()
+                    category = row[1].strip()
+                    try:
+                        confidence = float(row[2])
+                    except ValueError:
+                        confidence = 0.5  # Значение по умолчанию при ошибке
+                    
+                    # Создаем новый или обновляем существующий элемент
+                    if keyword in self.keyword_to_category:
+                        # Обновляем существующий элемент
+                        entry = self.keyword_to_category[keyword]
+                        entry.category = category
+                        entry.confidence = confidence
+                    else:
+                        # Создаем новый элемент
+                        entry = KeywordEntry(
+                            keyword=keyword,
+                            category=category,
+                            confidence=confidence
+                        )
+                        self.keyword_to_category[keyword] = entry
+                    
+                    # Добавляем в категорию
+                    self.category_keywords[category].append(entry)
+                    
+                    # Добавляем в индекс униграмм
+                    words = keyword.split()
+                    for word in words:
+                        if word not in self.unigram_to_categories:
+                            self.unigram_to_categories[word] = []
+                        self.unigram_to_categories[word].append(entry)
+                    
+                    # Добавляем биграммы, если слов в фразе больше одного
+                    if len(words) > 1:
+                        for i in range(len(words) - 1):
+                            bigram = f"{words[i]} {words[i + 1]}"
+                            self.bigram_to_category[bigram] = entry
+            
+            self.last_update = datetime.now()
+            
+        except Exception as e:
+            print(f"Ошибка при асинхронной загрузке данных из Google Sheets: {e}")
+
     def update_from_sheets(self):
-        """Обновление данных из Google Sheets"""
-        self.load_from_sheets()
+        """Обновление данных из Google Sheets - теперь вызывает асинхронный метод"""
+        import asyncio
+        try:
+            # Проверяем, запущен ли уже цикл
+            loop = asyncio.get_running_loop()
+            # Если цикл запущен, создаем задачу
+            asyncio.create_task(self.async_load_from_sheets())
+        except RuntimeError:
+            # Если цикл не запущен, инициализируем синхронно
+            asyncio.run(self.async_load_from_sheets())
     
     def get_category_by_keyword(self, keyword: str) -> Optional[Tuple[str, float]]:
         """
@@ -251,7 +328,7 @@ class KeywordDictionary:
         
         return results
     
-    def add_keyword(self, keyword: str, category: str, confidence: float = 0.5):
+    def add_keyword(self, keyword: str, category: str, confidence: float = 0.5, save_to_sheet: bool = True):
         """
         Добавление нового ключевого слова
         
@@ -259,6 +336,7 @@ class KeywordDictionary:
             keyword: Ключевое слово
             category: Категория
             confidence: Уверенность (0.0-1.0)
+            save_to_sheet: Сохранять ли ключевое слово в Google Sheets (по умолчанию True)
         """
         # Нормализуем ключевое слово: приводим к нижнему регистру и убираем лишние пробелы
         keyword_normalized = self.normalize_text(keyword)
@@ -293,7 +371,15 @@ class KeywordDictionary:
                 bigram = f"{words[i]} {words[i + 1]}"
                 self.bigram_to_category[bigram] = entry
         
-        # Сохраняем в Google Sheets
+        # Сохраняем в Google Sheets только если save_to_sheet=True
+        # Для асинхронного вызова используем отдельную функцию
+        if save_to_sheet:
+            self._async_add_keyword_to_sheet(keyword_normalized, category, confidence)
+        
+        self.last_update = datetime.now()
+
+    def _async_add_keyword_to_sheet(self, keyword: str, category: str, confidence: float):
+        """Асинхронное добавление ключевого слова в Google Sheets"""
         from sheets.client import add_keyword_to_sheet
         import asyncio
         try:
@@ -301,14 +387,12 @@ class KeywordDictionary:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # Если цикл уже запущен, создаем задачу
-                asyncio.create_task(add_keyword_to_sheet(keyword_normalized, category, confidence))
+                asyncio.create_task(add_keyword_to_sheet(keyword, category, confidence))
             else:
                 # Иначе запускаем напрямую
-                loop.run_until_complete(add_keyword_to_sheet(keyword_normalized, category, confidence))
+                loop.run_until_complete(add_keyword_to_sheet(keyword, category, confidence))
         except Exception as e:
             logger.error(f"❌ Ошибка при сохранении ключевого слова в Google Sheets: {e}")
-        
-        self.last_update = datetime.now()
     
     def normalize_text(self, text: str) -> str:
         """
