@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass, field
 
+from config import logger
 from sheets.client import GoogleSheetsClient
 
 
@@ -61,7 +62,7 @@ class KeywordDictionary:
     def load_from_sheets(self):
         """Загрузка данных из Google Sheets"""
         try:
-            # Получаем данные из Google Sheets
+            # Получаем данные из Google Sheets (один batch-запрос)
             data = self.sheets_client.get_sheet_data(self.spreadsheet_id, self.sheet_name)
             
             # Очищаем текущие данные
@@ -70,7 +71,7 @@ class KeywordDictionary:
             self.bigram_to_category.clear()
             self.unigram_to_categories.clear()
             
-            # Обрабатываем полученные данные
+            # Обрабатываем полученные данные (все в памяти, без дополнительных API-вызовов)
             for row in data:
                 if len(row) >= 3:  # Убедимся, что есть все необходимые столбцы
                     keyword = row[0].strip().lower()
@@ -135,6 +136,16 @@ class KeywordDictionary:
         # Пробуем найти точное совпадение
         if keyword_lower in self.keyword_to_category:
             entry = self.keyword_to_category[keyword_lower]
+            # Hotfix: проверяем, не является ли entry строкой вместо KeywordEntry
+            if isinstance(entry, str):
+                # Если entry - строка, создаем из нее KeywordEntry
+                entry = KeywordEntry(
+                    keyword=keyword_lower,
+                    category=entry,
+                    confidence=0.5
+                )
+                # Обновляем словарь
+                self.keyword_to_category[keyword_lower] = entry
             self._update_usage_stats(entry)
             return entry.category, entry.confidence
         
@@ -145,6 +156,16 @@ class KeywordDictionary:
                 bigram = f"{words[i]} {words[i + 1]}"
                 if bigram in self.bigram_to_category:
                     entry = self.bigram_to_category[bigram]
+                    # Hotfix: проверяем, не является ли entry строкой вместо KeywordEntry
+                    if isinstance(entry, str):
+                        # Если entry - строка, создаем из нее KeywordEntry
+                        entry = KeywordEntry(
+                            keyword=bigram,
+                            category=entry,
+                            confidence=0.5
+                        )
+                        # Обновляем словарь
+                        self.bigram_to_category[bigram] = entry
                     self._update_usage_stats(entry)
                     return entry.category, entry.confidence
         
@@ -155,6 +176,17 @@ class KeywordDictionary:
         for word in words:
             if word in self.unigram_to_categories:
                 for entry in self.unigram_to_categories[word]:
+                    # Hotfix: проверяем, не является ли entry строкой вместо KeywordEntry
+                    if isinstance(entry, str):
+                        # Если entry - строка, создаем из нее KeywordEntry
+                        entry = KeywordEntry(
+                            keyword=word,
+                            category=entry,
+                            confidence=0.5
+                        )
+                        # Обновляем список
+                        idx = self.unigram_to_categories[word].index(entry)
+                        self.unigram_to_categories[word][idx] = entry
                     if entry.confidence > max_confidence:
                         max_confidence = entry.confidence
                         best_category = entry.category
@@ -228,27 +260,28 @@ class KeywordDictionary:
             category: Категория
             confidence: Уверенность (0.0-1.0)
         """
-        keyword_lower = keyword.strip().lower()
+        # Нормализуем ключевое слово: приводим к нижнему регистру и убираем лишние пробелы
+        keyword_normalized = self.normalize_text(keyword)
         
-        if keyword_lower in self.keyword_to_category:
+        if keyword_normalized in self.keyword_to_category:
             # Обновляем существующий элемент
-            entry = self.keyword_to_category[keyword_lower]
+            entry = self.keyword_to_category[keyword_normalized]
             entry.category = category
             entry.confidence = confidence
         else:
             # Создаем новый элемент
             entry = KeywordEntry(
-                keyword=keyword_lower,
+                keyword=keyword_normalized,
                 category=category,
                 confidence=confidence
             )
-            self.keyword_to_category[keyword_lower] = entry
+            self.keyword_to_category[keyword_normalized] = entry
         
         # Добавляем в категорию
         self.category_keywords[category].append(entry)
         
         # Обновляем индекс униграмм
-        words = keyword_lower.split()
+        words = keyword_normalized.split()
         for word in words:
             if word not in self.unigram_to_categories:
                 self.unigram_to_categories[word] = []
@@ -260,7 +293,28 @@ class KeywordDictionary:
                 bigram = f"{words[i]} {words[i + 1]}"
                 self.bigram_to_category[bigram] = entry
         
+        # Сохраняем в Google Sheets
+        from sheets.client import add_keyword_to_sheet
+        import asyncio
+        try:
+            # Выполняем асинхронный вызов для сохранения в Google Sheets
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Если цикл уже запущен, создаем задачу
+                asyncio.create_task(add_keyword_to_sheet(keyword_normalized, category, confidence))
+            else:
+                # Иначе запускаем напрямую
+                loop.run_until_complete(add_keyword_to_sheet(keyword_normalized, category, confidence))
+        except Exception as e:
+            logger.error(f"❌ Ошибка при сохранении ключевого слова в Google Sheets: {e}")
+        
         self.last_update = datetime.now()
+    
+    def normalize_text(self, text: str) -> str:
+        """
+        Нормализация текста: приведение к нижнему регистру, удаление лишних пробелов
+        """
+        return text.strip().lower()
     
     def get_category_keywords(self, category: str) -> List[KeywordEntry]:
         """

@@ -12,11 +12,12 @@ from functools import lru_cache
 
 # Импортируем переменные из нашего нового модуля конфигурации
 from config import (
-    SERVICE_KEY, 
-    GOOGLE_SHEET_URL, 
-    DATA_SHEET_NAME, 
-    CATEGORIES_SHEET_NAME, 
-    CATEGORY_STORAGE, 
+    SERVICE_KEY,
+    GOOGLE_SHEET_URL,
+    DATA_SHEET_NAME,
+    CATEGORIES_SHEET_NAME,
+    KEYWORDS_SHEET_NAME,
+    CATEGORY_STORAGE,
     logger,
     SHEET_WRITE_TIMEOUT
 )
@@ -77,6 +78,7 @@ class GoogleSheetsClient:
             gc = self._get_client()
             sh = gc.open_by_url(spreadsheet_url)
             ws = sh.worksheet(sheet_name)
+            # Используем batch-запрос для получения всех значений за один вызов API
             data = ws.get_all_values()
             return data
         except Exception as e:
@@ -120,8 +122,39 @@ class GoogleSheetsCache:
             try:
                 gc = await self.get_client()
                 sh = await asyncio.to_thread(gc.open_by_url, GOOGLE_SHEET_URL)
-                ws = await asyncio.to_thread(sh.worksheet, sheet_name)
-                self._sheets[sheet_name] = ws
+                
+                # Обработка ошибки превышения квоты с надежным циклом
+                retries = 5
+                base_delay = 10  # seconds
+
+                for attempt in range(retries):
+                    try:
+                        # Try to fetch the worksheet
+                        ws = await asyncio.to_thread(sh.worksheet, sheet_name)
+                        self._sheets[sheet_name] = ws
+                        break
+                    except Exception as e:
+                        # Check for Rate Limit Error (429)
+                        is_rate_limit = False
+                        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 429:
+                            is_rate_limit = True
+                        elif "429" in str(e) or "quota" in str(e).lower():
+                            is_rate_limit = True
+
+                        if is_rate_limit:
+                            wait_time = base_delay * (attempt + 1) * 2  # Увеличиваем задержку
+                            # CRITICAL: Log this so the user knows the bot is NOT frozen
+                            print(f"⚠️ Google API Quota exceeded (429). Waiting {wait_time}s before retry {attempt+1}/{retries}...")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            # If it's a real error (e.g. Sheet not found), raise it immediately
+                            raise e
+                else:
+                    # Если не удалось подключиться после всех попыток
+                    raise SheetConnectionError(f"Could not connect to sheet '{sheet_name}' after {retries} retries.")
+                    
+            except SheetConnectionError:
+                raise
             except Exception as e:
                 logger.error(f"❌ Ошибка получения листа '{sheet_name}': {e}")
                 raise SheetConnectionError(f"Не удалось подключиться к листу {sheet_name}.")
@@ -190,8 +223,13 @@ async def load_categories_from_sheet() -> bool:
             from utils.category_classifier import classifier
             # Обновляем словарь ключевых слов в KeywordDictionary
             for category, keywords in CATEGORY_STORAGE.keywords.items():
-                for keyword in keywords:
-                    classifier.add_keyword(keyword, category)
+                try:
+                    for keyword in keywords:
+                        classifier.add_keyword(keyword, category)
+                except (KeyError, ValueError) as e:
+                    logger.warning(f"⚠️ Категория mapping failed для '{category}', используем raw string: {e}")
+                    # Продолжаем с другими категориями
+                    continue
             logger.info(f"✅ KeywordDictionary обновлен с {len(CATEGORY_STORAGE.keywords)} категориями.")
         except Exception as e:
             logger.error(f"❌ Ошибка обновления KeywordDictionary: {e}")
@@ -394,4 +432,36 @@ async def get_latest_transactions(user_id: str, limit: int = 5, offset: int = 0)
     except Exception as e:
         logger.error(f"❌ Ошибка при получении транзакций пользователя {user_id}: {e}")
         return []
+
+
+async def add_keyword_to_sheet(keyword: str, category: str, confidence: float = 1.0) -> bool:
+    """
+    Добавляет новое ключевое слово в лист Keywords.
+    """
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            ws = await get_google_sheet_client(KEYWORDS_SHEET_NAME)
+            break
+        except SheetConnectionError:
+            retry_count += 1
+            if retry_count >= max_retries:
+                return False
+            await asyncio.sleep(1)  # Ждем 1 секунду перед повторной попыткой
+
+    try:
+        # Подготовляем строку для добавления
+        row = [keyword, category, confidence]
+        
+        # Добавляем строку в таблицу
+        await asyncio.to_thread(ws.append_rows, [row])
+        
+        logger.info(f"✅ Ключевое слово '{keyword}' добавлено в таблицу '{KEYWORDS_SHEET_NAME}' с категорией '{category}'.")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при добавлении ключевого слова в Google Sheets: {e}")
+        return False
 

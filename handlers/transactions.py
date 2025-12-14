@@ -1326,8 +1326,20 @@ async def handle_category_selection(message: types.Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, выберите категорию из предложенных вариантов.")
         return
     
+    # Get the original description from state data
+    data = await state.get_data()
+    original_description = data.get('description', '')
+    
     # Update FSM data with selected category
     await state.update_data(category=selected_category)
+    
+    # Learn from this correction - associate the description with the selected category
+    if original_description:
+        from utils.category_classifier import classifier
+        classifier.learn_keyword(original_description, selected_category)
+        
+        # Notify the user about the learning
+        await message.answer(f"✅ Транзакция сохранена. Я также запомнил, что '{original_description}' относится к категории '{selected_category}'.")
     
     # Call the function to send transaction summary (go back to confirmation)
     await send_transaction_summary(message, state)

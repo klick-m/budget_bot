@@ -96,11 +96,22 @@ async def main():
     if not await load_categories_from_sheet():
          logger.error("❌ Критическая ошибка: Не удалось загрузить категории. Бот не будет запущен.")
          return
+         
+    # Инициализируем classifier после загрузки категорий
+    from utils.category_classifier import classifier
+    
+    # Добавляем задержку перед запуском бота для предотвращения превышения квоты
+    await asyncio.sleep(5)
      
     register_handlers(dp)
     register_draft_handlers(dp)
     register_text_parser_handler(dp)
     register_confirmation_handlers(dp)
+     
+    # Инициализируем classifier после загрузки категорий
+    from utils.category_classifier import classifier
+    # Ждем полной инициализации classifier
+    await asyncio.sleep(3)
      
     # Запуск фонового воркера синхронизации
     from sheets.client import get_google_sheet_client
