@@ -62,14 +62,19 @@ class KeywordDictionary:
         self.last_update: Optional[datetime] = None
         
         # Инициализация MorphAnalyzer для лемматизации
-        if MorphAnalyzer:
-            try:
+        self._initialize_morph_analyzer()
+    
+    def _initialize_morph_analyzer(self):
+        """Метод для инициализации morph_analyzer, который можно вызывать отдельно"""
+        try:
+            if MorphAnalyzer:
                 self.morph_analyzer = MorphAnalyzer()
-            except Exception as e:
-                logger.warning(f"⚠️ Не удалось инициализировать pymorphy3 MorphAnalyzer: {e}")
+                logger.info("✅ pymorphy3 MorphAnalyzer инициализирован")
+            else:
+                logger.warning("⚠️ pymorphy3 не установлен, лемматизация будет недоступна")
                 self.morph_analyzer = None
-        else:
-            logger.warning("⚠️ pymorphy3 не установлен, лемматизация будет недоступна")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось инициализировать pymorphy3 MorphAnalyzer: {e}")
             self.morph_analyzer = None
     
     def load_from_sheets(self):
@@ -186,6 +191,10 @@ class KeywordDictionary:
                             self.bigram_to_category[bigram] = entry
             
             self.last_update = datetime.now()
+            
+            # Убедимся, что morph_analyzer инициализирован
+            if not hasattr(self, 'morph_analyzer'):
+                self._initialize_morph_analyzer()
             
         except Exception as e:
             print(f"Ошибка при асинхронной загрузке данных из Google Sheets: {e}")
@@ -374,7 +383,7 @@ class KeywordDictionary:
         keyword_normalized = self.normalize_text(keyword)
         
         # Лемматизируем ключевое слово, если доступен morph_analyzer
-        keyword_lemmatized = self.lemmatize_text(keyword) if self.morph_analyzer else keyword_normalized
+        keyword_lemmatized = self.lemmatize_text(keyword) if (hasattr(self, 'morph_analyzer') and self.morph_analyzer) else keyword_normalized
         
         # Добавляем нормализованное слово
         if keyword_normalized in self.keyword_to_category:
@@ -467,7 +476,7 @@ class KeywordDictionary:
         """
         Лемматизация отдельного слова
         """
-        if self.morph_analyzer and len(word) >= 2:
+        if hasattr(self, 'morph_analyzer') and self.morph_analyzer and len(word) >= 2:
             try:
                 parsed_word = self.morph_analyzer.parse(word)[0]
                 return parsed_word.normal_form
@@ -480,7 +489,7 @@ class KeywordDictionary:
         """
         Лемматизация всего текста
         """
-        if not self.morph_analyzer:
+        if not hasattr(self, 'morph_analyzer') or not self.morph_analyzer:
             return text.lower()
             
         words = re.findall(r'\b[а-яёa-z]+\b', text.lower())
@@ -491,7 +500,7 @@ class KeywordDictionary:
         """
         Поиск категории по лемматизированному тексту
         """
-        if not self.morph_analyzer:
+        if not hasattr(self, 'morph_analyzer') or not self.morph_analyzer:
             return None
             
         # Лемматизируем входной текст

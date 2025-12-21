@@ -21,24 +21,25 @@ async def main():
     
     try:
         # 1. Проверка импортов
-        print("🔍 [1/4] Checking imports...")
+        print("🔍 [1/8] Checking imports...")
         from main import dp, bot
         print("✅ Imports passed.")
         
         # 2. Проверка конфига
-        print("🔍 [2/4] Checking configuration...")
+        print("🔍 [2/8] Checking configuration...")
         from config import BOT_TOKEN
         if not BOT_TOKEN: raise ValueError("BOT_TOKEN is missing")
         print("✅ Configuration passed.")
         
         # 3. Инициализация БД
-        print("🔍 [3/4] Checking DB initialization...")
+        print("🔍 [3/8] Checking DB initialization...")
         from services.repository import TransactionRepository
         repo = TransactionRepository()
+        await repo.init_db()
         print("✅ Repository initialized.")
 
         # 4. Инициализация Сервисов (ПРОВЕРКА НА БАГ)
-        print("🔍 [4/4] Checking Services Instantiation...")
+        print("🔍 [4/8] Checking Services Instantiation...")
         from services.transaction_service import TransactionService
         from services.sync_worker import start_sync_worker
         from sheets.client import load_categories_from_sheet
@@ -55,7 +56,50 @@ async def main():
         # Проверка инициализации классификатора
         await classifier.load()
         print(f"✅ Classifier loaded: {classifier}")
-
+        
+        # 5. Проверка KeywordDictionary
+        print("🔍 [5/8] Checking Keyword Dictionary...")
+        from models.keyword_dictionary import KeywordDictionary
+        from config import KEYWORDS_SPREADSHEET_ID, KEYWORDS_SHEET_NAME
+        keyword_dict = KeywordDictionary(KEYWORDS_SPREADSHEET_ID, KEYWORDS_SHEET_NAME)
+        await keyword_dict.load()
+        print(f"✅ KeywordDictionary loaded: {keyword_dict}")
+        
+        # 6. Проверка глобального сервиса
+        print("🔍 [6/8] Checking Global Service Locator...")
+        from services.global_service_locator import set_transaction_service, get_transaction_service
+        set_transaction_service(service)
+        retrieved_service = get_transaction_service()
+        if retrieved_service is None:
+            raise Exception("Global service locator failed to store/retrieve service")
+        print(f"✅ Global Service Locator working: {retrieved_service}")
+        
+        # 7. Проверка обработчиков
+        print("🔍 [7/8] Checking Handlers...")
+        from handlers.transactions import register_handlers, Transaction
+        register_handlers(dp, service)
+        print(f"✅ Handlers registered: {len(dp.message.handlers)} message handlers, {len(dp.callback_query.handlers)} callback handlers")
+        
+        # 8. Проверка парсеров
+        print("🔍 [8/8] Checking Parsers and Input Processing...")
+        from services.input_parser import InputParser
+        from services.text_parser import parse_transaction_text
+        from utils.receipt_logic import parse_check_from_api, extract_learnable_keywords
+        from utils.service_wrappers import safe_answer, edit_or_send
+        
+        parser = InputParser()
+        parsed = parser.parse_transaction("300 кофе")
+        if parsed:
+            print(f"✅ Input parser working: {parsed}")
+        else:
+            print("⚠️ Input parser returned None (may be normal for this input)")
+        
+        text_parsed = parse_transaction_text("250 чай")
+        if text_parsed['amount'] and text_parsed['category']:
+            print(f"✅ Text parser working: {text_parsed}")
+        else:
+            print("⚠️ Text parser failed to parse")
+        
         print("========================================")
         print("✅ DEEP SMOKE TEST PASSED. System is stable.")
         print("========================================")

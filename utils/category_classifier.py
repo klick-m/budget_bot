@@ -55,8 +55,14 @@ class TransactionCategoryClassifier:
             self.keyword_dict.usage_stats = Counter()
             self.keyword_dict.last_update = None
             self.keyword_dict.sheets_client = None
+            # Инициализируем morph_analyzer для пустого экземпляра
+            self.keyword_dict._initialize_morph_analyzer()
         else:
             self.keyword_dict = keyword_dict
+            
+        # Убедимся, что morph_analyzer инициализирован для keyword_dict
+        if not hasattr(self.keyword_dict, 'morph_analyzer'):
+            self.keyword_dict._initialize_morph_analyzer()
             
     async def load(self):
         """Асинхронная инициализация KeywordDictionary"""

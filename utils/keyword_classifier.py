@@ -30,8 +30,14 @@ class KeywordCategoryClassifier:
                 self.keyword_dict.unigram_to_categories = {}
                 self.keyword_dict.usage_stats = {}
                 self.keyword_dict.last_update = None
+                # Инициализируем morph_analyzer для пустого экземпляра
+                self.keyword_dict._initialize_morph_analyzer()
         else:
             self.keyword_dict = keyword_dict
+            
+        # Убедимся, что morph_analyzer инициализирован для keyword_dict
+        if not hasattr(self.keyword_dict, 'morph_analyzer'):
+            self.keyword_dict._initialize_morph_analyzer()
 
     def predict_category(self, transaction: TransactionData) -> Tuple[Optional[str], float]:
         """
