@@ -13,18 +13,17 @@ from aiogram import F
 
 # Импорт из нашей структуры
 from config import ALLOWED_USER_IDS, CATEGORY_STORAGE, logger, SHEET_WRITE_TIMEOUT
-from sheets.client import write_transaction, add_keywords_to_sheet, load_categories_from_sheet
 from models.transaction import TransactionData, CheckData
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from utils.exceptions import SheetWriteError, CheckApiTimeout, CheckApiRecognitionError
 from utils.service_wrappers import safe_answer, edit_or_send
-from utils.receipt_logic import parse_check_from_api, extract_learnable_keywords
-from utils.category_classifier import classifier
 from utils.keyboards import get_history_keyboard, HistoryCallbackData
 from sheets.client import get_latest_transactions
 from services.repository import TransactionRepository
 from services.text_parser import parse_transaction_text
+from services.input_parser import InputParser
+from services.transaction_service import TransactionService
 from aiogram.filters import Command, CommandObject
 
 
@@ -103,39 +102,14 @@ async def finalize_transaction(message_to_edit: types.Message, state: FSMContext
         await state.clear()
         return
 
-    # 2. Запись в Google Sheets с таймаутом
-    try:
-        # Обучаем классификатор на новой транзакции перед записью
-        transactions_for_training = [transaction]
-        
-        # Пытаемся получить историю транзакций для обучения
-        # (в реальном приложении здесь нужно будет получить исторические данные из Google Sheets)
-        # Пока используем только текущую транзакцию, но в будущем можно расширить
-        
-        # Обновляем модель классификатора
-        classifier.train(transactions_for_training)
-        
-        async with asyncio.timeout(SHEET_WRITE_TIMEOUT):
-            await write_transaction(transaction)
-            
-        transaction_dt_str = transaction.transaction_dt.strftime('%d.%m.%Y %H:%M')
-        
-        summary = (
-            f"✅ **Транзакция записана!**\n\n"
-            f"Дата операции: **{transaction_dt_str}**\n"
-            f"Тип: **{transaction.type}**\n"
-            f"Категория: **{transaction.category}**\n"
-            f"Сумма: **{transaction.amount}** руб.\n"
-            f"Комментарий: *{transaction.comment or 'Нет'}*"
-        )
-        
-        await edit_or_send(bot, message_to_edit, summary, parse_mode="Markdown")
+    # 2. Используем TransactionService для финализации транзакции
+    service = TransactionService()
+    result = await service.finalize_transaction(transaction)
     
-    except asyncio.TimeoutError:
-        await edit_or_send(bot, message_to_edit, f"❌ **Ошибка записи в Google Sheets!** Превышено время ожидания ({SHEET_WRITE_TIMEOUT} сек). Попробуйте повторить транзакцию позже.", parse_mode="Markdown")
-    
-    except SheetWriteError as e:
-        await edit_or_send(bot, message_to_edit, f"❌ **Ошибка записи в Google Sheets!** Ошибка: {e}", parse_mode="Markdown")
+    if result['success']:
+        await edit_or_send(bot, message_to_edit, result['summary'], parse_mode="Markdown")
+    else:
+        await edit_or_send(bot, message_to_edit, f"❌ **Ошибка записи в Google Sheets!** Ошибка: {result['error']}", parse_mode="Markdown")
     
     await state.clear()
 
@@ -164,7 +138,7 @@ async def command_start_handler(message: types.Message):
 
 
 async def test_sheets_handler(message: types.Message):
-    status_msg = await message.answer("⏳ **Записываю тестовую транзакцию...** Ожидайте.") 
+    status_msg = await message.answer("⏳ **Записываю тестовую транзакцию...** Ожидайте.")
 
     test_data = TransactionData(
         type='ТЕСТ',
@@ -175,21 +149,21 @@ async def test_sheets_handler(message: types.Message):
         transaction_dt=datetime.now()
     )
     
-    try:
-        async with asyncio.timeout(SHEET_WRITE_TIMEOUT):
-            await write_transaction(test_data) 
-        
+    service = TransactionService()
+    result = await service.finalize_transaction(test_data)
+    
+    if result['success']:
         await edit_or_send(
-            message.bot, 
+            message.bot,
             status_msg,
-            text="✅ **Успех!** Тестовая запись успешно добавлена в Google Таблицу.", 
+            text="✅ **Успех!** Тестовая запись успешно добавлена в Google Таблицу.",
             parse_mode="Markdown"
         )
-    except (asyncio.TimeoutError, SheetWriteError) as e:
-         await edit_or_send(
-            message.bot, 
+    else:
+        await edit_or_send(
+            message.bot,
             status_msg,
-            text=f"❌ **Ошибка!** Не удалось записать транзакцию: {e}", 
+            text=f"❌ **Ошибка!** Не удалось записать транзакцию: {result['error']}",
             parse_mode="Markdown"
         )
 
@@ -299,7 +273,8 @@ async def handle_photo(message: types.Message, state: FSMContext):
     
     # 0. Загружаем категории из Google Sheets с кэшированием, чтобы использовать актуальные ключевые слова
     # Загрузка происходит с кэшированием, поэтому не будет частых обращений к API
-    await load_categories_from_sheet()
+    service = TransactionService()
+    await service.load_categories()
     
     file_info = await message.bot.get_file(file_object.file_id)
     file_url = f"https://api.telegram.org/file/bot{message.bot.token}/{file_info.file_path}"
@@ -313,22 +288,28 @@ async def handle_photo(message: types.Message, state: FSMContext):
         await edit_or_send(message.bot, status_msg, f"❌ Ошибка скачивания файла: {e}")
         return
 
-    # 2. Парсинг API (логика в utils/receipt_logic.py)
+    # 2. Обработка изображения чека через TransactionService
     try:
-        parsed_data: CheckData = await parse_check_from_api(image_bytes) 
+        parsed_data: CheckData = await service.create_transaction_from_check(image_bytes)
     except (CheckApiTimeout, CheckApiRecognitionError) as e:
         await edit_or_send(message.bot, status_msg, f"❌ Анализ чека не удался. {e}\nПопробуйте ввести вручную: /new_transaction")
         return
-        
-    if parsed_data.amount <= 0:
-        await edit_or_send(message.bot, status_msg, "❌ Чек распознан, но сумма равна нулю или отрицательна. Введите вручную: /new_transaction")
+    except ValueError as e:
+        await edit_or_send(message.bot, status_msg, f"❌ {e}. Введите вручную: /new_transaction")
         return
 
-    # 3. Сохранение данных в FSM
+    # 3. Обработка данных чека через TransactionService
+    try:
+        transaction = await service.process_check_data(parsed_data, message.from_user.username or message.from_user.full_name)
+    except Exception as e:
+        await edit_or_send(message.bot, status_msg, f"❌ Ошибка обработки данных чека: {e}")
+        return
+
+    # Сохранение данных в FSM
     # Преобразуем Pydantic-модель в словарь для FSM
     fsm_data = parsed_data.model_dump()
     # Добавляем объект datetime для дальнейшей записи
-    fsm_data['transaction_dt'] = parsed_data.transaction_datetime 
+    fsm_data['transaction_dt'] = parsed_data.transaction_datetime
     await state.update_data(**fsm_data)
     
     # --- Форматирование предпросмотра ---
@@ -347,7 +328,9 @@ async def handle_photo(message: types.Message, state: FSMContext):
     fallback_category = CATEGORY_STORAGE.expense[-1] if CATEGORY_STORAGE.expense else "Прочее Расход"
     # -----------------------------------
 
-    # Создаем TransactionData из полученных данных для использования в классификаторе
+    # Используем обработанную транзакцию
+    predicted_category = transaction.category
+    # Используем уверенность из обработки, но для этого нужно получить её из сервиса
     temp_transaction = TransactionData(
         type=parsed_data.type,
         category=parsed_data.category,
@@ -360,14 +343,8 @@ async def handle_photo(message: types.Message, state: FSMContext):
         transaction_dt=parsed_data.transaction_datetime
     )
     
-    # Применяем улучшенную классификацию сначала через KeywordDictionary (новая система)
-    # Если новая система дает результат с высокой уверенностью, используем его
-    keyword_result = classifier.get_category_by_keyword(f"{parsed_data.retailer_name} {parsed_data.items_list}")
-    if keyword_result and keyword_result[1] > 0.7:  # Если уверенность выше 0.7
-        predicted_category, confidence = keyword_result
-    else:
-        # Если новая система не дала результата или уверенность низкая, используем ML-классификатор
-        predicted_category, confidence = classifier.predict_category(temp_transaction)
+    # Получаем уверенность из классификатора
+    _, confidence = service.classifier.predict_category(temp_transaction)
     
     # Вместо предложения новой категории, используем только существующие категории
     if parsed_data.category == fallback_category or confidence < 0.5:
@@ -637,18 +614,21 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
         new_category = data.get('category')
         retailer_name = data.get('retailer_name', 'Неизвестный Продавец')
         items_list_str = data.get('items_list', '')
-        keywords_to_learn = extract_learnable_keywords(retailer_name, items_list_str)
         
         # Показываем статус о сохранении ключевых слов
         status_msg = await edit_or_send(
             bot,
             callback.message,
-            text=f"⏳ Категория **{new_category}** подтверждена. Запоминаю {len(keywords_to_learn)} ключевых слов для будущих чеков...",
+            text=f"⏳ Категория **{new_category}** подтверждена. Запоминаю ключевые слова для будущих чеков...",
             parse_mode="Markdown"
         )
         
-        # Записываем ключевые слова в Google Sheets
-        await add_keywords_to_sheet(new_category, keywords_to_learn)
+        # Используем TransactionService для добавления ключевых слов
+        service = TransactionService()
+        keywords_added = await service.add_keywords_for_transaction(new_category, retailer_name, items_list_str)
+        
+        if not keywords_added:
+            logger.warning(f"Не удалось добавить ключевые слова для категории {new_category}")
         
         # Обучаем классификатор на новой транзакции
         temp_transaction = TransactionData(
@@ -664,7 +644,7 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
         )
         
         # Обновляем модель классификатора
-        classifier.train([temp_transaction])
+        service.classifier.train([temp_transaction])
         
         # Теперь записываем саму транзакцию
         await edit_or_send(
@@ -690,8 +670,9 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
             transaction_dt=data.get('transaction_dt', datetime.now())
         )
         
-        # Обновляем модель классификатора
-        classifier.train([temp_transaction])
+        # Используем TransactionService для обучения классификатора
+        service = TransactionService()
+        service.classifier.train([temp_transaction])
         
         await edit_or_send(
             bot,
@@ -1016,36 +997,14 @@ async def finalize_transaction_draft(message_to_edit: types.Message, state: FSMC
             await send_draft_message(message_to_edit, state)
             return
         
-        # Обучаем классификатор на новой транзакции перед записью
-        transactions_for_training = [transaction]
-        classifier.train(transactions_for_training)
+        # Используем TransactionService для финализации транзакции
+        service = TransactionService()
+        result = await service.finalize_transaction(transaction)
         
-        # Запись в Google Sheets с таймаутом
-        try:
-            async with asyncio.timeout(SHEET_WRITE_TIMEOUT):
-                await write_transaction(transaction)
-                
-            transaction_dt_str = transaction.transaction_dt.strftime('%d.%m.%Y %H:%M')
-            
-            summary = (
-                f"✅ **Транзакция записана!**\n\n"
-                f"Дата операции: **{transaction_dt_str}**\n"
-                f"Тип: **{transaction.type}**\n"
-                f"Категория: **{transaction.category}**\n"
-                f"Сумма: **{transaction.amount}** руб.\n"
-                f"Комментарий: *{transaction.comment or 'Нет'}*"
-            )
-            
-            await edit_or_send(bot, message_to_edit, summary, parse_mode="Markdown")
-        
-        except asyncio.TimeoutError:
-            await edit_or_send(bot, message_to_edit, f"❌ **Ошибка записи в Google Sheets!** Превышено время ожидания ({SHEET_WRITE_TIMEOUT} сек). Попробуйте повторить транзакцию позже.", parse_mode="Markdown")
-        
-        except SheetWriteError as e:
-            await edit_or_send(bot, message_to_edit, f"❌ **Ошибка записи в Google Sheets!** Ошибка: {e}", parse_mode="Markdown")
-        
-        except Exception as e:
-            await edit_or_send(bot, message_to_edit, f"❌ **Непредвиденная ошибка при записи в Google Sheets:** {e}", parse_mode="Markdown")
+        if result['success']:
+            await edit_or_send(bot, message_to_edit, result['summary'], parse_mode="Markdown")
+        else:
+            await edit_or_send(bot, message_to_edit, f"❌ **Ошибка записи в Google Sheets!** Ошибка: {result['error']}", parse_mode="Markdown")
     
     except Exception as e:
         logger.error(f"Критическая ошибка в finalize_transaction_draft: {e}")
@@ -1197,13 +1156,14 @@ async def parse_transaction_handler(message: types.Message, state: FSMContext):
         await message.answer("❌ Не удалось распознать сумму в тексте. Отправьте сообщение в формате 'сумма категория' (например, '300 кофе').")
         return
     
-    # Predict category using the classifier
-    predicted_category = classifier.get_category_by_keyword(description)
+    # Predict category using the classifier from TransactionService
+    service = TransactionService()
+    predicted_category = service.classifier.get_category_by_keyword(description)
     if predicted_category:
         category = predicted_category[0] # Get the category from the tuple
     else:
         # If prediction fails, use the raw description and let the classifier validate it
-        category = classifier.predict(description)  # This will return a valid category or "Другое"
+        category = service.classifier.predict(description)  # This will return a valid category or "Другое"
     
     # Store transaction data in FSM state
     await state.update_data(
@@ -1236,10 +1196,125 @@ async def parse_transaction_handler(message: types.Message, state: FSMContext):
     await state.set_state(Transaction.waiting_for_confirmation)
 
 
+async def smart_input_handler(message: types.Message, state: FSMContext):
+    """Handle plain text messages for smart input (without /add command)."""
+    text = message.text.strip()
+    
+    # Initialize the input parser
+    parser = InputParser()
+    parsed_result = parser.parse_user_input(text)
+    
+    if not parsed_result:
+        # If parsing fails, do nothing to avoid interfering with normal conversation
+        return
+    
+    amount = parsed_result['amount']
+    comment = parsed_result['comment']
+    
+    # Validate amount
+    if amount is None or amount <= 0:
+        await message.answer("❌ Не удалось распознать сумму в тексте. Отправьте сообщение в формате 'сумма категория' (например, '300 кофе').")
+        return
+    
+    # Initialize transaction service
+    service = TransactionService()
+    
+    # If there's a comment, try to classify it to get category
+    category = None
+    if comment:
+        # Try to find category using classifier
+        temp_transaction = TransactionData(
+            type='Расход',  # Default type for smart input
+            category='',
+            amount=amount,
+            comment=comment,
+            username=message.from_user.username or message.from_user.full_name,
+            retailer_name='',
+            items_list='',
+            payment_info='',
+            transaction_dt=datetime.now()
+        )
+        
+        predicted_category, confidence = service.classifier.predict_category(temp_transaction)
+        
+        # If classifier is confident, use predicted category
+        if confidence > 0.5:
+            category = predicted_category
+        else:
+            category = None  # Will need to ask user for category
+    
+    # If we have both amount and a confident category prediction, save directly
+    if category:
+        # Create transaction with predicted category
+        transaction = TransactionData(
+            type='Расход',
+            category=category,
+            amount=amount,
+            comment=comment,
+            username=message.from_user.username or message.from_user.full_name,
+            retailer_name='',
+            items_list='',
+            payment_info='',
+            transaction_dt=datetime.now()
+        )
+        
+        # Finalize transaction directly
+        result = await service.finalize_transaction(transaction)
+        
+        if result['success']:
+            await message.answer(result['summary'])
+        else:
+            await message.answer(f"❌ **Ошибка записи в Google Sheets!** Ошибка: {result['error']}", parse_mode="Markdown")
+    else:
+        # If we only have amount or category prediction is not confident, ask for category using FSM
+        await state.update_data(
+            amount=amount,
+            comment=comment
+        )
+        
+        # Get available categories
+        from config import CATEGORY_STORAGE
+        category_list = CATEGORY_STORAGE.expense  # Assuming expense categories for this flow
+        
+        # Create ReplyKeyboard with available categories
+        from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+        
+        # Create buttons in rows of 2
+        keyboard_buttons = []
+        for i in range(0, len(category_list), 2):
+            row = [KeyboardButton(text=cat) for cat in category_list[i:i+2]]
+            keyboard_buttons.append(row)
+        
+        # Add a 'Skip' button to allow user to skip category selection
+        keyboard_buttons.append([KeyboardButton(text="⏭️ Пропустить")])
+        keyboard_buttons.append([KeyboardButton(text="❌ Отмена")])
+        
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=keyboard_buttons,
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+        
+        # Ask user to select a category
+        if comment:
+            await message.answer(f"Сумма: {amount}\nКомментарий: {comment}\n\nВыберите категорию:", reply_markup=keyboard)
+        else:
+            await message.answer(f"Сумма: {amount}\n\nВыберите категорию:", reply_markup=keyboard)
+        
+        # Set state to waiting for category selection
+        await state.set_state(Transaction.waiting_for_category_selection)
+
+
 def register_text_parser_handler(dp: Dispatcher):
     """Register the text parser handler."""
     # Register with a filter to exclude the category selection state
     dp.message.register(parse_transaction_handler, F.text, ~StateFilter(Transaction.waiting_for_category_selection), ~F.text.startswith('/'), AllowedUsersFilter())
+
+
+def register_smart_input_handler(dp: Dispatcher):
+    """Register the smart input handler."""
+    # Register with a filter to exclude the category selection state and FSM states
+    dp.message.register(smart_input_handler, F.text, ~StateFilter(Transaction.waiting_for_category_selection), ~F.text.startswith('/'), AllowedUsersFilter())
 
 
 async def handle_save_tx(callback: types.CallbackQuery, state: FSMContext):
@@ -1318,6 +1393,41 @@ async def handle_category_selection(message: types.Message, state: FSMContext):
         await message.answer("❌ Выбор категории отменен.", reply_markup=get_main_keyboard())
         return
     
+    # Check if user wants to skip category
+    if selected_category == "⏭️ Пропустить":
+        # Get data from state
+        data = await state.get_data()
+        amount = data.get('amount')
+        comment = data.get('comment', '')
+        
+        # Initialize transaction service
+        service = TransactionService()
+        
+        # Create transaction with default category
+        transaction = TransactionData(
+            type='Расход',
+            category='Прочее Расход',  # Default category when skipping
+            amount=amount,
+            comment=comment,
+            username=message.from_user.username or message.from_user.full_name,
+            retailer_name='',
+            items_list='',
+            payment_info='',
+            transaction_dt=datetime.now()
+        )
+        
+        # Finalize transaction
+        result = await service.finalize_transaction(transaction)
+        
+        if result['success']:
+            await message.answer(result['summary'])
+        else:
+            await message.answer(f"❌ **Ошибка записи в Google Sheets!** Ошибка: {result['error']}", parse_mode="Markdown")
+        
+        # Clear state
+        await state.clear()
+        return
+    
     # Get available categories to validate selection
     from config import CATEGORY_STORAGE
     available_categories = CATEGORY_STORAGE.expense  # Assuming expense categories for this flow
@@ -1327,23 +1437,44 @@ async def handle_category_selection(message: types.Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, выберите категорию из предложенных вариантов.")
         return
     
-    # Get the original description from state data
+    # Get the original comment from state data
     data = await state.get_data()
-    original_description = data.get('description', '')
+    original_comment = data.get('comment', '')
+    amount = data.get('amount')
     
-    # Update FSM data with selected category
-    await state.update_data(category=selected_category)
+    # Initialize transaction service
+    service = TransactionService()
     
-    # Learn from this correction - associate the description with the selected category
-    if original_description:
-        from utils.category_classifier import classifier
-        classifier.learn_keyword(original_description, selected_category)
+    # Create transaction with selected category
+    transaction = TransactionData(
+        type='Расход',
+        category=selected_category,
+        amount=amount,
+        comment=original_comment,
+        username=message.from_user.username or message.from_user.full_name,
+        retailer_name='',
+        items_list='',
+        payment_info='',
+        transaction_dt=datetime.now()
+    )
+    
+    # Finalize transaction
+    result = await service.finalize_transaction(transaction)
+    
+    if result['success']:
+        await message.answer(result['summary'])
+    else:
+        await message.answer(f"❌ **Ошибка записи в Google Sheets!** Ошибка: {result['error']}", parse_mode="Markdown")
+    
+    # Learn from this correction - associate the comment with the selected category
+    if original_comment:
+        service.classifier.learn_keyword(original_comment, selected_category)
         
         # Notify the user about the learning
-        await message.answer(f"✅ Транзакция сохранена. Я также запомнил, что '{original_description}' относится к категории '{selected_category}'.")
+        await message.answer(f"✅ Я также запомнил, что '{original_comment}' относится к категории '{selected_category}'.")
     
-    # Call the function to send transaction summary (go back to confirmation)
-    await send_transaction_summary(message, state)
+    # Clear state
+    await state.clear()
 
 
 # Function to send transaction summary (reusable)

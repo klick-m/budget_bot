@@ -9,6 +9,11 @@ from collections import defaultdict, Counter
 import math
 from datetime import datetime
 
+try:
+    from pymorphy3 import MorphAnalyzer
+except ImportError:
+    MorphAnalyzer = None
+
 from models.transaction import TransactionData
 from models.keyword_dictionary import KeywordDictionary
 from config import logger, KEYWORDS_SPREADSHEET_ID, KEYWORDS_SHEET_NAME
@@ -26,50 +31,20 @@ class TransactionCategoryClassifier:
         self.total_transactions = 0
         self.categories = set()
         
+        # Инициализация MorphAnalyzer для лемматизации
+        if MorphAnalyzer:
+            try:
+                self.morph_analyzer = MorphAnalyzer()
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось инициализировать pymorphy3 MorphAnalyzer: {e}")
+                self.morph_analyzer = None
+        else:
+            logger.warning("⚠️ pymorphy3 не установлен, лемматизация будет недоступна")
+            self.morph_analyzer = None
+        
         # Интеграция с новой системой KeywordDictionary
         if keyword_dict is None:
-            try:
-                # Создаем пустой экземпляр на время инициализации
-                self.keyword_dict = KeywordDictionary.__new__(KeywordDictionary)
-                self.keyword_dict.spreadsheet_id = KEYWORDS_SPREADSHEET_ID
-                self.keyword_dict.sheet_name = KEYWORDS_SHEET_NAME
-                self.keyword_dict.category_keywords = defaultdict(list)
-                self.keyword_dict.keyword_to_category = {}
-                self.keyword_dict.bigram_to_category = {}
-                self.keyword_dict.unigram_to_categories = {}
-                self.keyword_dict.usage_stats = Counter()
-                self.keyword_dict.last_update = None
-                self.keyword_dict.sheets_client = None
-                # Инициализируем KeywordDictionary асинхронно
-                import asyncio
-                try:
-                    # Проверяем, запущен ли уже цикл
-                    loop = asyncio.get_running_loop()
-                    # Если цикл запущен, создаем задачу
-                    asyncio.create_task(self.async_init())
-                except RuntimeError:
-                    # Если цикл не запущен, инициализируем синхронно
-                    asyncio.run(self.async_init())
-            except Exception as e:
-                logger.warning(f"⚠️ Не удалось инициализировать KeywordDictionary: {e}. Создаю пустой экземпляр.")
-                # Создаем пустой экземпляр для тестирования
-                self.keyword_dict = KeywordDictionary.__new__(KeywordDictionary)
-                self.keyword_dict.spreadsheet_id = KEYWORDS_SPREADSHEET_ID
-                self.keyword_dict.sheet_name = KEYWORDS_SHEET_NAME
-                self.keyword_dict.category_keywords = defaultdict(list)
-                self.keyword_dict.keyword_to_category = {}
-                self.keyword_dict.bigram_to_category = {}
-                self.keyword_dict.unigram_to_categories = {}
-                self.keyword_dict.usage_stats = Counter()
-                self.keyword_dict.last_update = None
-        else:
-            self.keyword_dict = keyword_dict
-            
-    async def async_init(self):
-        """Асинхронная инициализация KeywordDictionary"""
-        await asyncio.sleep(2)  # Задержка перед инициализацией
-        try:
-            # Используем асинхронную инициализацию
+            # Создаем пустой экземпляр на время инициализации
             self.keyword_dict = KeywordDictionary.__new__(KeywordDictionary)
             self.keyword_dict.spreadsheet_id = KEYWORDS_SPREADSHEET_ID
             self.keyword_dict.sheet_name = KEYWORDS_SHEET_NAME
@@ -79,15 +54,28 @@ class TransactionCategoryClassifier:
             self.keyword_dict.unigram_to_categories = {}
             self.keyword_dict.usage_stats = Counter()
             self.keyword_dict.last_update = None
+            self.keyword_dict.sheets_client = None
+        else:
+            self.keyword_dict = keyword_dict
+            
+    async def load(self):
+        """Асинхронная инициализация KeywordDictionary"""
+        try:
+            # Если keyword_dict еще не инициализирован как полноценный объект, делаем это
+            if not hasattr(self.keyword_dict, 'async_load_from_sheets'):
+                self.keyword_dict = KeywordDictionary(
+                    spreadsheet_id=KEYWORDS_SPREADSHEET_ID,
+                    sheet_name=KEYWORDS_SHEET_NAME
+                )
             
             # Вызываем асинхронную инициализацию
-            asyncio.create_task(self.keyword_dict.async_load_from_sheets())
+            await self.keyword_dict.load()
             
         except Exception as e:
             logger.error(f"❌ Ошибка при инициализации KeywordDictionary: {e}")
             
-   # Удаляем старый метод delayed_init, так как он заменен на async_init
-        
+    # Удаляем старый метод delayed_init, так как он заменен на async_init
+         
     def extract_features(self, text: str) -> List[str]:
         """
         Извлечение признаков из текста транзакции
@@ -96,6 +84,20 @@ class TransactionCategoryClassifier:
         text = text.lower()
         # Убираем цифры и специальные символы, оставляя только слова
         words = re.findall(r'\b[а-яёa-z]+\b', text)
+        
+        # Лемматизируем слова, если доступен morph_analyzer
+        if self.morph_analyzer:
+            lemmatized_words = []
+            for word in words:
+                if len(word) >= 2:  # лемматизируем только слова длиной 2 символа и более
+                    try:
+                        parsed_word = self.morph_analyzer.parse(word)[0]
+                        lemma = parsed_word.normal_form
+                        lemmatized_words.append(lemma)
+                    except Exception:
+                        # Если лемматизация не удалась, используем исходное слово
+                        lemmatized_words.append(word)
+            words = lemmatized_words
         
         # Фильтруем короткие слова и добавляем n-граммы
         features = []
@@ -111,6 +113,30 @@ class TransactionCategoryClassifier:
         
         # Убираем дубликаты
         return list(set(features))
+    
+    def lemmatize_word(self, word: str) -> str:
+        """
+        Лемматизация отдельного слова
+        """
+        if self.morph_analyzer and len(word) >= 2:
+            try:
+                parsed_word = self.morph_analyzer.parse(word)[0]
+                return parsed_word.normal_form
+            except Exception:
+                # Если лемматизация не удалась, возвращаем исходное слово
+                return word
+        return word
+    
+    def lemmatize_text(self, text: str) -> str:
+        """
+        Лемматизация всего текста
+        """
+        if not self.morph_analyzer:
+            return text.lower()
+            
+        words = re.findall(r'\b[а-яёa-z]+\b', text.lower())
+        lemmatized_words = [self.lemmatize_word(word) for word in words]
+        return ' '.join(lemmatized_words)
     
     def train(self, transactions: List[TransactionData]):
         """
@@ -268,8 +294,15 @@ class TransactionCategoryClassifier:
         # Нормализуем текст с помощью метода из KeywordDictionary
         normalized_text = self.keyword_dict.normalize_text(cleaned_text)
         
+        # Лемматизируем текст, если доступен morph_analyzer
+        lemmatized_text = self.lemmatize_text(cleaned_text) if self.morph_analyzer else normalized_text
+        
         # Добавляем ключевое слово в KeywordDictionary
         self.add_keyword(normalized_text, category)
+        
+        # Также добавляем лемматизированную версию
+        if lemmatized_text != normalized_text:
+            self.add_keyword(lemmatized_text, category, save_to_sheet=False)  # Не сохраняем лемму отдельно в Google Sheets
         
         # Обновляем локальные данные
         self.categories.add(category)
@@ -278,8 +311,11 @@ class TransactionCategoryClassifier:
                 self.category_keywords[category] = []
             if normalized_text not in self.category_keywords[category]:
                 self.category_keywords[category].append(normalized_text)
+            # Также добавляем лемму, если она отличается
+            if lemmatized_text != normalized_text and lemmatized_text not in self.category_keywords[category]:
+                self.category_keywords[category].append(lemmatized_text)
         
-        logger.info(f"Добавлено новое ключевое слово: '{normalized_text}' -> '{category}'")
+        logger.info(f"Добавлено новое ключевое слово: '{normalized_text}' -> '{category}' (с леммой: '{lemmatized_text}')")
 
     def predict(self, text: str) -> str:
         """

@@ -1,1 +1,36 @@
-{"mcpServers":{"context7":{"command":"npx","args":["-y","@upstash/context7-mcp"],"env":{"DEFAULT_MINIMUM_TOKENS":""},"alwaysAllow":["resolve-library-id","get-library-docs",""]}}}
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "env": {
+        "CONTEXT7_API_KEY": "Bearer ctx7sk-3f59bf78-7220-4128-996e-fe0d84e7ddcd"
+      },
+      "disabled": false,
+      "alwaysAllow": []
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "PLACEHOLDER"
+      },
+      "disabled": true
+    },
+    "postgres": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://user:password@localhost/dbname"
+      ],
+      "disabled": true
+    }
+  }
+}

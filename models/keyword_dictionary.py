@@ -4,6 +4,11 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass, field
 
+try:
+    from pymorphy3 import MorphAnalyzer
+except ImportError:
+    MorphAnalyzer = None
+
 from config import logger
 from sheets.client import GoogleSheetsClient
 
@@ -56,17 +61,16 @@ class KeywordDictionary:
         # Дата последнего обновления
         self.last_update: Optional[datetime] = None
         
-        # Загружаем данные при инициализации
-        # Используем асинхронную загрузку с кэшированием
-        import asyncio
-        try:
-            # Проверяем, запущен ли уже цикл
-            loop = asyncio.get_running_loop()
-            # Если цикл запущен, создаем задачу
-            asyncio.create_task(self.async_load_from_sheets())
-        except RuntimeError:
-            # Если цикл не запущен, инициализируем синхронно
-            asyncio.run(self.async_load_from_sheets())
+        # Инициализация MorphAnalyzer для лемматизации
+        if MorphAnalyzer:
+            try:
+                self.morph_analyzer = MorphAnalyzer()
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось инициализировать pymorphy3 MorphAnalyzer: {e}")
+                self.morph_analyzer = None
+        else:
+            logger.warning("⚠️ pymorphy3 не установлен, лемматизация будет недоступна")
+            self.morph_analyzer = None
     
     def load_from_sheets(self):
         """Загрузка данных из Google Sheets"""
@@ -197,6 +201,14 @@ class KeywordDictionary:
         except RuntimeError:
             # Если цикл не запущен, инициализируем синхронно
             asyncio.run(self.async_load_from_sheets())
+
+    async def load(self):
+        """Асинхронный метод для загрузки данных из Google Sheets"""
+        await self.async_load_from_sheets()
+    
+    async def update_dictionary(self):
+        """Метод для обновления словаря - теперь асинхронный"""
+        await self.async_load_from_sheets()
     
     def get_category_by_keyword(self, keyword: str) -> Optional[Tuple[str, float]]:
         """
@@ -278,6 +290,11 @@ class KeywordDictionary:
             self._update_usage_stats(fake_entry)
             return best_category, max_confidence
         
+        # Если обычный поиск не дал результата, пробуем найти по лемме
+        lemma_result = self._find_by_lemma(keyword)
+        if lemma_result:
+            return lemma_result
+        
         return None
     
     def _update_usage_stats(self, entry: KeywordEntry):
@@ -323,6 +340,21 @@ class KeywordDictionary:
                         self._update_usage_stats(entry)
                         results.append((entry.category, entry.confidence))
         
+        # Если не нашли результатов по обычному тексту, пробуем использовать лемматизацию
+        if not results and self.morph_analyzer:
+            lemma_results = self._find_by_lemma(text)
+            if lemma_results:
+                category, confidence = lemma_results
+                # Проверяем, не является ли уже этот результат дубликатом
+                if (category, confidence) not in results:
+                    fake_entry = KeywordEntry(
+                        keyword=self.lemmatize_text(text),
+                        category=category,
+                        confidence=confidence
+                    )
+                    self._update_usage_stats(fake_entry)
+                    results.append((category, confidence))
+        
         # Сортируем по уверенности
         results.sort(key=lambda x: x[1], reverse=True)
         
@@ -341,6 +373,10 @@ class KeywordDictionary:
         # Нормализуем ключевое слово: приводим к нижнему регистру и убираем лишние пробелы
         keyword_normalized = self.normalize_text(keyword)
         
+        # Лемматизируем ключевое слово, если доступен morph_analyzer
+        keyword_lemmatized = self.lemmatize_text(keyword) if self.morph_analyzer else keyword_normalized
+        
+        # Добавляем нормализованное слово
         if keyword_normalized in self.keyword_to_category:
             # Обновляем существующий элемент
             entry = self.keyword_to_category[keyword_normalized]
@@ -371,6 +407,33 @@ class KeywordDictionary:
                 bigram = f"{words[i]} {words[i + 1]}"
                 self.bigram_to_category[bigram] = entry
         
+        # Если лемматизированное слово отличается от нормализованного, добавляем его тоже
+        if keyword_lemmatized != keyword_normalized:
+            if keyword_lemmatized not in self.keyword_to_category:
+                # Создаем новый элемент для леммы
+                lemma_entry = KeywordEntry(
+                    keyword=keyword_lemmatized,
+                    category=category,
+                    confidence=confidence
+                )
+                self.keyword_to_category[keyword_lemmatized] = lemma_entry
+                
+                # Добавляем лемму в категорию
+                self.category_keywords[category].append(lemma_entry)
+                
+                # Обновляем индекс униграмм для леммы
+                lemma_words = keyword_lemmatized.split()
+                for word in lemma_words:
+                    if word not in self.unigram_to_categories:
+                        self.unigram_to_categories[word] = []
+                    self.unigram_to_categories[word].append(lemma_entry)
+                
+                # Обновляем биграммы для леммы
+                if len(lemma_words) > 1:
+                    for i in range(len(lemma_words) - 1):
+                        bigram = f"{lemma_words[i]} {lemma_words[i + 1]}"
+                        self.bigram_to_category[bigram] = lemma_entry
+        
         # Сохраняем в Google Sheets только если save_to_sheet=True
         # Для асинхронного вызова используем отдельную функцию
         if save_to_sheet:
@@ -399,6 +462,78 @@ class KeywordDictionary:
         Нормализация текста: приведение к нижнему регистру, удаление лишних пробелов
         """
         return text.strip().lower()
+    
+    def lemmatize_word(self, word: str) -> str:
+        """
+        Лемматизация отдельного слова
+        """
+        if self.morph_analyzer and len(word) >= 2:
+            try:
+                parsed_word = self.morph_analyzer.parse(word)[0]
+                return parsed_word.normal_form
+            except Exception:
+                # Если лемматизация не удалась, возвращаем исходное слово
+                return word
+        return word
+    
+    def lemmatize_text(self, text: str) -> str:
+        """
+        Лемматизация всего текста
+        """
+        if not self.morph_analyzer:
+            return text.lower()
+            
+        words = re.findall(r'\b[а-яёa-z]+\b', text.lower())
+        lemmatized_words = [self.lemmatize_word(word) for word in words]
+        return ' '.join(lemmatized_words)
+    
+    def _find_by_lemma(self, text: str) -> Optional[Tuple[str, float]]:
+        """
+        Поиск категории по лемматизированному тексту
+        """
+        if not self.morph_analyzer:
+            return None
+            
+        # Лемматизируем входной текст
+        lemmatized_text = self.lemmatize_text(text)
+        
+        # Пробуем найти точное совпадение с лемматизированным текстом
+        if lemmatized_text in self.keyword_to_category:
+            entry = self.keyword_to_category[lemmatized_text]
+            self._update_usage_stats(entry)
+            return entry.category, entry.confidence
+        
+        # Проверяем биграммы в лемматизированном тексте
+        lemmatized_words = lemmatized_text.split()
+        for i in range(len(lemmatized_words) - 1):
+            bigram = f"{lemmatized_words[i]} {lemmatized_words[i + 1]}"
+            if bigram in self.bigram_to_category:
+                entry = self.bigram_to_category[bigram]
+                self._update_usage_stats(entry)
+                return entry.category, entry.confidence
+        
+        # Проверяем отдельные лемматизированные слова
+        max_confidence = 0.0
+        best_category = None
+        
+        for word in lemmatized_words:
+            if word in self.unigram_to_categories:
+                for entry in self.unigram_to_categories[word]:
+                    if entry.confidence > max_confidence:
+                        max_confidence = entry.confidence
+                        best_category = entry.category
+        
+        if best_category:
+            # Создаем фиктивную запись для обновления статистики
+            fake_entry = KeywordEntry(
+                keyword=lemmatized_text,
+                category=best_category,
+                confidence=max_confidence
+            )
+            self._update_usage_stats(fake_entry)
+            return best_category, max_confidence
+        
+        return None
     
     def get_category_keywords(self, category: str) -> List[KeywordEntry]:
         """

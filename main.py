@@ -100,19 +100,18 @@ async def main():
          
     # Инициализируем classifier после загрузки категорий
     from utils.category_classifier import classifier
-    
-    # Добавляем задержку перед запуском бота для предотвращения превышения квоты
-    await asyncio.sleep(5)
+    try:
+        logger.info("Загрузка классификатора и словарей...")
+        # Импортируй classifier, если нужно
+        await classifier.load()
+        logger.info("Классификатор готов.")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки данных: {e}")
      
     register_handlers(dp)
     register_draft_handlers(dp)
     register_text_parser_handler(dp)
     register_confirmation_handlers(dp)
-     
-    # Инициализируем classifier после загрузки категорий
-    from utils.category_classifier import classifier
-    # Ждем полной инициализации classifier
-    await asyncio.sleep(3)
      
     # Запуск фонового воркера синхронизации
     from sheets.client import get_google_sheet_client
