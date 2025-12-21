@@ -17,8 +17,9 @@ class TransactionService:
     Объединяет логику валидации, DTO, и записи транзакций.
     """
     
-    def __init__(self):
+    def __init__(self, repository=None):
         self.classifier = classifier
+        self.repository = repository
 
     async def create_transaction_from_check(self, image_bytes: bytes) -> Optional[CheckData]:
         """
@@ -80,21 +81,31 @@ class TransactionService:
 
     async def save_transaction(self, transaction: TransactionData) -> bool:
         """
-        Сохраняет транзакцию в Google Sheets и обучает классификатор.
+        Сохраняет транзакцию в SQLite (First Write pattern) и обучает классификатор.
         """
         try:
             # Обучаем классификатор на новой транзакции перед записью
             self.classifier.train([transaction])
 
-            # Записываем транзакцию в Google Sheets
-            await write_transaction(transaction)
+            # Проверяем, что репозиторий доступен
+            if self.repository is None:
+                raise Exception("Repository not initialized for TransactionService")
+            
+            # Извлекаем user_id из username (в реальной реализации user_id должен приходить из контекста пользователя)
+            # Для тестирования используем фиктивный user_id
+            user_id = 1 # В реальной реализации это должно быть получено из контекста
+            
+            # Записываем транзакцию в SQLite синхронно (First Write pattern)
+            await self.repository.add_transaction(
+                user_id=user_id,
+                amount=transaction.amount,
+                category=transaction.category,
+                comment=transaction.comment
+            )
+            
             return True
-        except asyncio.TimeoutError:
-            raise SheetWriteError(f"Превышено время ожидания при записи транзакции")
-        except SheetWriteError as e:
-            raise e
         except Exception as e:
-            raise SheetWriteError(f"Неизвестная ошибка при записи транзакции: {e}")
+            raise SheetWriteError(f"Ошибка при записи транзакции в SQLite: {e}")
 
     async def add_keywords_for_transaction(self, category: str, retailer_name: str, items_list: str) -> bool:
         """

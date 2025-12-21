@@ -34,8 +34,12 @@ async def start_sync_worker(bot, repository: TransactionRepository, sheets_clien
                     await repository.mark_as_synced(transaction['id'])
                     
                 except Exception as e:
-                    logger.error(f"Failed to sync transaction {transaction['id']}: {e}")
+                    # Ошибки Google Sheets логируются, но не крашат бота
+                    # Транзакция остается несинхронизированной и будет повторена в следующий раз
+                    logger.error(f"Failed to sync transaction {transaction['id']} to Google Sheets: {e}")
+                    logger.debug(f"Transaction details: {transaction}")
                     
         except Exception as e:
+            # Общие ошибки воркера также логируются, но не крашат бота
             logger.error(f"Sync worker error: {e}")
             await asyncio.sleep(60)  # Пауза перед следующей итерацией при ошибке

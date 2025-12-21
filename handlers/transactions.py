@@ -24,6 +24,7 @@ from services.repository import TransactionRepository
 from services.text_parser import parse_transaction_text
 from services.input_parser import InputParser
 from services.transaction_service import TransactionService
+from services.global_service_locator import get_transaction_service
 from aiogram.filters import Command, CommandObject
 
 
@@ -103,7 +104,12 @@ async def finalize_transaction(message_to_edit: types.Message, state: FSMContext
         return
 
     # 2. Используем TransactionService для финализации транзакции
-    service = TransactionService()
+    service = get_transaction_service()
+    if service is None:
+        logger.error("TransactionService not initialized!")
+        await edit_or_send(bot, message_to_edit, "❌ Критическая ошибка: TransactionService не инициализирован.", parse_mode="Markdown")
+        await state.clear()
+        return
     result = await service.finalize_transaction(transaction)
     
     if result['success']:
@@ -149,7 +155,16 @@ async def test_sheets_handler(message: types.Message):
         transaction_dt=datetime.now()
     )
     
-    service = TransactionService()
+    service = get_transaction_service()
+    if service is None:
+        logger.error("TransactionService not initialized!")
+        await edit_or_send(
+            message.bot,
+            status_msg,
+            text=f"❌ **Ошибка!** TransactionService не инициализирован.",
+            parse_mode="Markdown"
+        )
+        return
     result = await service.finalize_transaction(test_data)
     
     if result['success']:
@@ -273,7 +288,11 @@ async def handle_photo(message: types.Message, state: FSMContext):
     
     # 0. Загружаем категории из Google Sheets с кэшированием, чтобы использовать актуальные ключевые слова
     # Загрузка происходит с кэшированием, поэтому не будет частых обращений к API
-    service = TransactionService()
+    service = get_transaction_service()
+    if service is None:
+        logger.error("TransactionService not initialized!")
+        await edit_or_send(message.bot, status_msg, f"❌ Критическая ошибка: TransactionService не инициализирован.")
+        return
     await service.load_categories()
     
     file_info = await message.bot.get_file(file_object.file_id)
@@ -624,7 +643,16 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
         )
         
         # Используем TransactionService для добавления ключевых слов
-        service = TransactionService()
+        service = get_transaction_service()
+        if service is None:
+            logger.error("TransactionService not initialized!")
+            await edit_or_send(
+                bot,
+                status_msg,
+                text=f"❌ Критическая ошибка: TransactionService не инициализирован.",
+                parse_mode="Markdown"
+            )
+            return
         keywords_added = await service.add_keywords_for_transaction(new_category, retailer_name, items_list_str)
         
         if not keywords_added:
@@ -671,7 +699,16 @@ async def process_comment_skip(callback: types.CallbackQuery, state: FSMContext,
         )
         
         # Используем TransactionService для обучения классификатора
-        service = TransactionService()
+        service = get_transaction_service()
+        if service is None:
+            logger.error("TransactionService not initialized!")
+            await edit_or_send(
+                bot,
+                callback.message,
+                text=f"❌ Критическая ошибка: TransactionService не инициализирован.",
+                parse_mode="Markdown"
+            )
+            return
         service.classifier.train([temp_transaction])
         
         await edit_or_send(
@@ -998,7 +1035,12 @@ async def finalize_transaction_draft(message_to_edit: types.Message, state: FSMC
             return
         
         # Используем TransactionService для финализации транзакции
-        service = TransactionService()
+        service = get_transaction_service()
+        if service is None:
+            logger.error("TransactionService not initialized!")
+            await edit_or_send(bot, message_to_edit, f"❌ **Критическая ошибка:** TransactionService не инициализирован.", parse_mode="Markdown")
+            await state.clear()
+            return
         result = await service.finalize_transaction(transaction)
         
         if result['success']:
@@ -1157,7 +1199,11 @@ async def parse_transaction_handler(message: types.Message, state: FSMContext):
         return
     
     # Predict category using the classifier from TransactionService
-    service = TransactionService()
+    service = get_transaction_service()
+    if service is None:
+        logger.error("TransactionService not initialized!")
+        await message.answer("❌ **Критическая ошибка:** TransactionService не инициализирован.")
+        return
     predicted_category = service.classifier.get_category_by_keyword(description)
     if predicted_category:
         category = predicted_category[0] # Get the category from the tuple
@@ -1217,7 +1263,11 @@ async def smart_input_handler(message: types.Message, state: FSMContext):
         return
     
     # Initialize transaction service
-    service = TransactionService()
+    service = get_transaction_service()
+    if service is None:
+        logger.error("TransactionService not initialized!")
+        await message.answer("❌ **Критическая ошибка:** TransactionService не инициализирован.")
+        return
     
     # If there's a comment, try to classify it to get category
     category = None
@@ -1401,7 +1451,11 @@ async def handle_category_selection(message: types.Message, state: FSMContext):
         comment = data.get('comment', '')
         
         # Initialize transaction service
-        service = TransactionService()
+        service = get_transaction_service()
+        if service is None:
+            logger.error("TransactionService not initialized!")
+            await message.answer("❌ **Критическая ошибка:** TransactionService не инициализирован.")
+            return
         
         # Create transaction with default category
         transaction = TransactionData(
@@ -1443,7 +1497,11 @@ async def handle_category_selection(message: types.Message, state: FSMContext):
     amount = data.get('amount')
     
     # Initialize transaction service
-    service = TransactionService()
+    service = get_transaction_service()
+    if service is None:
+        logger.error("TransactionService not initialized!")
+        await message.answer("❌ **Критическая ошибка:** TransactionService не инициализирован.")
+        return
     
     # Create transaction with selected category
     transaction = TransactionData(

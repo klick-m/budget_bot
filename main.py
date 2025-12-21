@@ -32,6 +32,8 @@ from aiogram.types import BotCommand, MenuButtonWebApp
 # Импорты для Local First архитектуры
 from services.repository import TransactionRepository
 from services.sync_worker import start_sync_worker
+from services.transaction_service import TransactionService
+from services.global_service_locator import set_transaction_service
 
 
 # 2. Инициализация Бота и Диспетчера
@@ -39,7 +41,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # --- Регистрация хендлеров ---
-def register_handlers(dp: Dispatcher):
+def register_handlers(dp: Dispatcher, transaction_service: TransactionService):
     
     # 1. Команды и Основные кнопки
     # ВНИМАНИЕ: CommandStart не требует AllowedUsersFilter,
@@ -54,7 +56,7 @@ def register_handlers(dp: Dispatcher):
     # 2. Обработка чеков
     dp.message.register(handle_photo, F.photo | F.document, AllowedUsersFilter())
 
-    # 3. FSM 
+    # 3. FSM
     dp.callback_query.register(process_type_choice, F.data.startswith("type_"), Transaction.choosing_type, AllowedUsersFilter())
     dp.callback_query.register(process_category_choice, F.data.startswith("cat_"), Transaction.choosing_category, AllowedUsersFilter())
     
@@ -108,7 +110,13 @@ async def main():
     except Exception as e:
         logger.error(f"Ошибка загрузки данных: {e}")
      
-    register_handlers(dp)
+    # Создаем TransactionService с внедренным репозиторием
+    transaction_service = TransactionService(repository=transaction_repository)
+    
+    # Устанавливаем сервис в глобальный локатор
+    set_transaction_service(transaction_service)
+    
+    register_handlers(dp, transaction_service)
     register_draft_handlers(dp)
     register_text_parser_handler(dp)
     register_confirmation_handlers(dp)
