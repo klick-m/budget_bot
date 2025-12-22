@@ -13,15 +13,11 @@
       "alwaysAllow": []
     },
     "sqlite": {
-      "command": "npx.cmd",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sqlite",
-        "--db-path",
-        "./transactions.db"
+      "command": "C:/Project/budget_bot/.venv/Scripts/python.exe",      "args": [
+        "db_server.py"
       ],
       "disabled": false,
-      "alwaysAllow": ["read_query"]
+      "alwaysAllow": []
     }
   }
 }
