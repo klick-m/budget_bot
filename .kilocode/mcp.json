@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "context7": {
-      "command": "npx",
+      "command": "npx.cmd",
       "args": [
         "-y",
         "@upstash/context7-mcp"
@@ -12,25 +12,16 @@
       "disabled": false,
       "alwaysAllow": []
     },
-    "github": {
-      "command": "npx",
+    "sqlite": {
+      "command": "npx.cmd",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-github"
+        "@modelcontextprotocol/server-sqlite",
+        "--db-path",
+        "./transactions.db"
       ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "PLACEHOLDER"
-      },
-      "disabled": true
-    },
-    "postgres": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-postgres",
-        "postgresql://user:password@localhost/dbname"
-      ],
-      "disabled": true
+      "disabled": false,
+      "alwaysAllow": ["read_query"]
     }
   }
 }
