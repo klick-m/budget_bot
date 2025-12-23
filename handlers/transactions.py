@@ -1168,15 +1168,15 @@ async def close_history_handler(callback: types.CallbackQuery):
 def register_draft_handlers(dp: Dispatcher):
     """Регистрирует хендлеры для работы с черновиками транзакций"""
     # Обработчики inline-кнопок для черновика
-    dp.callback_query.register(handle_edit_type, F.data == "edit_type", Transaction.editing_draft)
-    dp.callback_query.register(handle_type_choice, F.data.startswith("type_"), Transaction.editing_draft)
-    dp.callback_query.register(handle_edit_category_draft, F.data == "edit_category_draft", Transaction.editing_draft)
-    dp.callback_query.register(handle_category_choice_draft, F.data.startswith("cat_"), Transaction.editing_draft)
-    dp.callback_query.register(handle_edit_amount, F.data == "edit_amount", Transaction.editing_draft)
-    dp.callback_query.register(handle_edit_comment, F.data == "edit_comment", Transaction.editing_draft)
-    dp.callback_query.register(handle_confirm_draft, F.data == "confirm_draft", Transaction.editing_draft)
-    dp.callback_query.register(handle_cancel_draft, F.data == "cancel_draft", Transaction.editing_draft)
-    dp.callback_query.register(handle_comment_skip_draft, F.data == "comment_none_draft", Transaction.entering_comment)
+    dp.callback_query.register(handle_edit_type, F.data == "edit_type", Transaction.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(handle_type_choice, F.data.startswith("type_"), Transaction.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(handle_edit_category_draft, F.data == "edit_category_draft", Transaction.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(handle_category_choice_draft, F.data.startswith("cat_"), Transaction.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(handle_edit_amount, F.data == "edit_amount", Transaction.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(handle_edit_comment, F.data == "edit_comment", Transaction.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(handle_confirm_draft, F.data == "confirm_draft", Transaction.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(handle_cancel_draft, F.data == "cancel_draft", Transaction.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(handle_comment_skip_draft, F.data == "comment_none_draft", Transaction.entering_comment, AllowedUsersFilter())
     
     # Обработчики ввода текста для черновика
     dp.message.register(handle_amount_entry_draft, Transaction.entering_amount, F.text, AllowedUsersFilter())
@@ -1571,9 +1571,9 @@ async def send_transaction_summary(message: types.Message, state: FSMContext):
 # Register the new callback handlers
 def register_confirmation_handlers(dp: Dispatcher):
     """Register confirmation handlers."""
-    dp.callback_query.register(handle_save_tx, F.data == "save_tx", Transaction.waiting_for_confirmation)
-    dp.callback_query.register(handle_cancel_tx, F.data == "cancel_tx", Transaction.waiting_for_confirmation)
-    dp.callback_query.register(handle_change_category, F.data == "change_cat_tx", Transaction.waiting_for_confirmation)
+    dp.callback_query.register(handle_save_tx, F.data == "save_tx", Transaction.waiting_for_confirmation, AllowedUsersFilter())
+    dp.callback_query.register(handle_cancel_tx, F.data == "cancel_tx", Transaction.waiting_for_confirmation, AllowedUsersFilter())
+    dp.callback_query.register(handle_change_category, F.data == "change_cat_tx", Transaction.waiting_for_confirmation, AllowedUsersFilter())
     # Register the new message handler for category selection
     dp.message.register(handle_category_selection, Transaction.waiting_for_category_selection, F.text, AllowedUsersFilter())
     

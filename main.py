@@ -44,8 +44,8 @@ dp = Dispatcher()
 def register_handlers(dp: Dispatcher, transaction_service: TransactionService):
     
     # 1. Команды и Основные кнопки
-    # ВНИМАНИЕ: CommandStart не требует AllowedUsersFilter,
-    # так как мы хотим, чтобы все могли вызвать /start, но фильтр можно оставить для контроля.
+    # Обратите внимание: все команды и кнопки защищены фильтром AllowedUsersFilter,
+    # чтобы обеспечить доступ только разрешенным пользователям.
     dp.message.register(command_start_handler, F.text.startswith('/start'), AllowedUsersFilter())
     dp.message.register(test_sheets_handler, Command("test_sheets"), AllowedUsersFilter())
     dp.message.register(test_sheets_handler, F.text == "🧪 Проверить Sheets", AllowedUsersFilter())
