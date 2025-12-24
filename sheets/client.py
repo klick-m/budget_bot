@@ -487,7 +487,7 @@ async def get_latest_transactions(user_id: str, limit: int = 5, offset: int = 0)
         for row in rows:
             if len(row) > 6:  # Убедимся, что индекс username (6) доступен
                 username = row[6] if len(row) > 6 else ""
-                if username == user_id or str(user_id) in username:
+                if username == user_id:
                     # Создаем словарь с данными транзакции
                     transaction_dict = {
                         "date": row[0] if len(row) > 0 else "",
@@ -508,8 +508,9 @@ async def get_latest_transactions(user_id: str, limit: int = 5, offset: int = 0)
             try:
                 dt_str = f"{transaction['date']} {transaction['time']}"
                 return datetime.strptime(dt_str, "%d.%m.%Y %H:%M:%S")
-            except:
+            except ValueError as e:
                 # Если формат даты не распознан, возвращаем минимальную дату
+                logger.warning(f"Ошибка парсинга даты и времени: {e}")
                 return datetime.min
 
         user_transactions.sort(key=parse_datetime, reverse=True)

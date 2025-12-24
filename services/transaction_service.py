@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # services/transaction_service.py
 import asyncio
+import traceback
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
@@ -9,6 +10,8 @@ from sheets.client import write_transaction, add_keywords_to_sheet, load_categor
 from utils.exceptions import SheetWriteError, CheckApiTimeout, CheckApiRecognitionError
 from utils.receipt_logic import parse_check_from_api, extract_learnable_keywords
 from utils.category_classifier import classifier
+
+from config import logger
 
 
 class TransactionService:
@@ -105,6 +108,8 @@ class TransactionService:
             
             return True
         except Exception as e:
+            logger.error(f"Ошибка при записи транзакции в SQLite: {e}")
+            logger.debug(f"Стек вызова: {traceback.format_exc()}")
             raise SheetWriteError(f"Ошибка при записи транзакции в SQLite: {e}")
 
     async def add_keywords_for_transaction(self, category: str, retailer_name: str, items_list: str) -> bool:
@@ -153,6 +158,8 @@ class TransactionService:
                 'error': f"Ошибка записи в Google Sheets! Превышено время ожидания"
             }
         except Exception as e:
+            logger.error(f"Неизвестная ошибка при финализации транзакции: {e}")
+            logger.debug(f"Стек вызова: {traceback.format_exc()}")
             return {
                 'success': False,
                 'error': f"Неизвестная ошибка: {e}"

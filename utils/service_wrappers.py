@@ -3,6 +3,7 @@ from aiogram import Bot, types
 from aiogram.exceptions import TelegramBadRequest
 from config import logger
 from aiogram.types import ReplyKeyboardMarkup
+from aiogram.fsm.context import FSMContext
 
 async def safe_answer(callback: types.CallbackQuery):
     """
@@ -53,3 +54,21 @@ async def edit_or_send(bot: Bot, message: types.Message, text: str, **kwargs):
         text=text,
         **kwargs
     )
+
+async def clean_previous_kb(bot: Bot, state: FSMContext, chat_id: int):
+    """
+    Removes the inline keyboard from the previous message to clean up the UI.
+    """
+    data = await state.get_data()
+    last_kb_msg_id = data.get('last_kb_msg_id')
+    
+    if last_kb_msg_id:
+        try:
+            # Try to edit the message to remove the markup
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=last_kb_msg_id, reply_markup=None)
+        except Exception:
+            # Ignore errors (e.g., message too old, deleted, etc.)
+            pass
+        
+        # Clear the ID from state
+        await state.update_data(last_kb_msg_id=None)

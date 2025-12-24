@@ -42,6 +42,11 @@ The Memory Bank consists of core files and optional context files, all in Markdo
    - Technical constraints
    - Dependencies
    - Tool usage patterns
+6. `current_task.md`
+   - THE LIVE CHECKLIST. Single source of truth for the active task status.
+   - Must contain checkboxes [ ] for every step.
+   - Only Orchestrator updates the plan.
+   - Agents must mark [x] when done.
 
 ### Additional Files
 Create additional files/folders within memory-bank/ when they help organize:

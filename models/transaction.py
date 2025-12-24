@@ -1,7 +1,10 @@
 # models/transaction.py
+import traceback
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, Literal # <--- Добавлен Literal
+
+from config import logger
 
 class CheckData(BaseModel):
     """Модель данных, извлекаемых из API чека."""
@@ -27,8 +30,9 @@ class CheckData(BaseModel):
                 except ValueError:
                     # Если секунд нет, парсим без них
                     return datetime.strptime(self.check_datetime_str, "%Y-%m-%dT%H:%M")
-            except Exception:
-                pass # Если парсинг не удался, переходим к current_datetime
+            except ValueError as e:
+                logger.warning(f"Ошибка парсинга даты транзакции '{self.check_datetime_str}': {e}")
+                logger.debug(f"Стек вызова: {traceback.format_exc()}")
 
         return datetime.now()
 

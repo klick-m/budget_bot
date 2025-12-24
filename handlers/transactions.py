@@ -17,7 +17,7 @@ from models.transaction import TransactionData, CheckData
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from utils.exceptions import SheetWriteError, CheckApiTimeout, CheckApiRecognitionError
-from utils.service_wrappers import safe_answer, edit_or_send
+from utils.service_wrappers import safe_answer, edit_or_send, clean_previous_kb
 from utils.keyboards import get_history_keyboard, HistoryCallbackData
 from sheets.client import get_latest_transactions
 from services.repository import TransactionRepository
@@ -123,7 +123,10 @@ async def finalize_transaction(message_to_edit: types.Message, state: FSMContext
 # --- C. ХЕНДЛЕРЫ КОМАНД И ОСНОВНЫЕ ФУНКЦИИ ---
 # ----------------------------------------------------------------------
 
-async def command_start_handler(message: types.Message):
+async def command_start_handler(message: types.Message, state: FSMContext):
+    # 1. Clean previous UI
+    await clean_previous_kb(message.bot, state, message.chat.id)
+    
     # Создаем Reply-клавиатуру с командами
     keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
@@ -184,6 +187,9 @@ async def test_sheets_handler(message: types.Message):
 
 
 async def new_transaction_handler(message: types.Message, state: FSMContext):
+    # 1. Clean previous UI
+    await clean_previous_kb(message.bot, state, message.chat.id)
+    
     await state.clear()
     
     # Создаем черновик транзакции
@@ -431,14 +437,17 @@ async def process_type_choice(callback: types.CallbackQuery, state: FSMContext, 
     
     await safe_answer(callback) # <--- ИСПОЛЬЗУЕМ ОБЕРТКУ safe_answer
     
+    # 1. Clean previous UI
+    await clean_previous_kb(bot, state, callback.message.chat.id)
+    
     transaction_type = callback.data.split('_')[1]
     
     category_list = CATEGORY_STORAGE.expense if transaction_type == "Расход" else CATEGORY_STORAGE.income
     
     if not category_list:
         await edit_or_send(
-            bot, 
-            callback.message, 
+            bot,
+            callback.message,
             text=f"❌ Категории для типа '{transaction_type}' не загружены. Проверьте лист 'Categories'!",
         )
         return
@@ -454,30 +463,43 @@ async def process_type_choice(callback: types.CallbackQuery, state: FSMContext, 
         inline_keyboard=[buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     )
     
-    await edit_or_send(
-        bot, 
+    # 2. Send new message with keyboard
+    sent_msg = await edit_or_send(
+        bot,
         callback.message,
-        text=f"Выбран тип: **{transaction_type}**. \nВыберите категорию:", 
-        parse_mode="Markdown", 
+        text=f"Выбран тип: **{transaction_type}**. \nВыберите категорию:",
+        parse_mode="Markdown",
         reply_markup=keyboard
     )
+    
+    # 3. Track new message ID
+    if sent_msg:
+        await state.update_data(last_kb_msg_id=sent_msg.message_id)
 
 
 async def process_category_choice(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
     
     await safe_answer(callback) # <--- ИСПОЛЬЗУЕМ ОБЕРТКУ safe_answer
     
+    # 1. Clean previous UI
+    await clean_previous_kb(bot, state, callback.message.chat.id)
+    
     category = callback.data.split('_')[1]
     
     await state.update_data(category=category)
     await state.set_state(Transaction.entering_amount)
     
-    await edit_or_send(
-        bot, 
+    # 2. Send new message with keyboard (if any)
+    sent_msg = await edit_or_send(
+        bot,
         callback.message,
         text=f"Категория: **{category}**. \nТеперь введите **сумму** (только число).",
         parse_mode="Markdown"
     )
+    
+    # 3. Track new message ID
+    if sent_msg:
+        await state.update_data(last_kb_msg_id=sent_msg.message_id)
 
 
 async def process_category_choice_after_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
