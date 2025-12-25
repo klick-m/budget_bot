@@ -192,7 +192,7 @@ async def new_transaction_handler(message: types.Message, state: FSMContext):
     
     await state.clear()
     
-    # Создаем черновик транзакции
+    # Создаем черновик транзакции (все поля будут пустыми/None)
     draft = TransactionDraft()
     await state.update_data(draft=draft.__dict__)
     await state.set_state(Transaction.editing_draft)
@@ -1220,18 +1220,42 @@ async def parse_transaction_handler(message: types.Message, state: FSMContext):
         await message.answer("❌ Не удалось распознать сумму в тексте. Отправьте сообщение в формате 'сумма категория' (например, '300 кофе').")
         return
     
-    # Predict category using the classifier from TransactionService
+    # Initialize transaction service
     service = get_transaction_service()
     if service is None:
         logger.error("TransactionService not initialized!")
         await message.answer("❌ **Критическая ошибка:** TransactionService не инициализирован.")
         return
-    predicted_category = service.classifier.get_category_by_keyword(description)
-    if predicted_category:
-        category = predicted_category[0] # Get the category from the tuple
+    
+    # Predict category using the classifier from TransactionService
+    # First try to find category by keyword using the keyword dictionary
+    keyword_result = service.classifier.get_category_by_keyword(description)
+    if keyword_result:
+        category, confidence = keyword_result
+        logger.info(f"Keyword matching result for '{description}': {category} with confidence {confidence}")
     else:
-        # If prediction fails, use the raw description and let the classifier validate it
-        category = service.classifier.predict(description)  # This will return a valid category or "Другое"
+        # If keyword matching fails, try ML classification
+        # Create a temporary transaction for classification
+        temp_transaction = TransactionData(
+            type='Расход',  # Default type
+            category='',
+            amount=amount,
+            comment=description,
+            username=message.from_user.username or message.from_user.full_name,
+            retailer_name='',
+            items_list='',
+            payment_info='',
+            transaction_dt=datetime.now()
+        )
+        
+        predicted_category, confidence = service.classifier.predict_category(temp_transaction)
+        logger.info(f"ML classification result for '{description}': {predicted_category} with confidence {confidence}")
+        
+        if confidence > 0.5:  # Use ML prediction if confidence is high enough
+            category = predicted_category
+        else:
+            # If both methods fail, use the raw description and let the classifier validate it
+            category = service.classifier.predict(description)  # This will return a valid category or "Другое"
     
     # Store transaction data in FSM state
     await state.update_data(
@@ -1294,26 +1318,33 @@ async def smart_input_handler(message: types.Message, state: FSMContext):
     # If there's a comment, try to classify it to get category
     category = None
     if comment:
-        # Try to find category using classifier
-        temp_transaction = TransactionData(
-            type='Расход',  # Default type for smart input
-            category='',
-            amount=amount,
-            comment=comment,
-            username=message.from_user.username or message.from_user.full_name,
-            retailer_name='',
-            items_list='',
-            payment_info='',
-            transaction_dt=datetime.now()
-        )
-        
-        predicted_category, confidence = service.classifier.predict_category(temp_transaction)
-        
-        # If classifier is confident, use predicted category
-        if confidence > 0.5:
-            category = predicted_category
+        # First try to find category by keyword using the keyword dictionary
+        keyword_result = service.classifier.get_category_by_keyword(comment)
+        if keyword_result:
+            category, confidence = keyword_result
+            logger.info(f"Keyword matching result for '{comment}': {category} with confidence {confidence}")
         else:
-            category = None  # Will need to ask user for category
+            # If keyword matching fails, try ML classification
+            temp_transaction = TransactionData(
+                type='Расход',  # Default type for smart input
+                category='',
+                amount=amount,
+                comment=comment,
+                username=message.from_user.username or message.from_user.full_name,
+                retailer_name='',
+                items_list='',
+                payment_info='',
+                transaction_dt=datetime.now()
+            )
+            
+            predicted_category, confidence = service.classifier.predict_category(temp_transaction)
+            logger.info(f"ML classification result for '{comment}': {predicted_category} with confidence {confidence}")
+            
+            # If classifier is confident, use predicted category
+            if confidence > 0.5:
+                category = predicted_category
+            else:
+                category = None  # Will need to ask user for category
     
     # If we have both amount and a confident category prediction, save directly
     if category:
@@ -1400,15 +1431,36 @@ async def handle_save_tx(callback: types.CallbackQuery, state: FSMContext):
     description = data.get('description')
     user_id = callback.from_user.id
     
-    # Create repository instance and save transaction
-    repo = TransactionRepository()
-    await repo.add_transaction(user_id, amount, category, description)
+    # Initialize transaction service
+    service = get_transaction_service()
+    if service is None:
+        logger.error("TransactionService not initialized!")
+        await callback.message.edit_text("❌ **Критическая ошибка:** TransactionService не инициализирован.")
+        return
+    
+    # Create transaction with data from state
+    transaction = TransactionData(
+        type='Расход',  # Default type for this flow
+        category=category,
+        amount=amount,
+        comment=description,  # Using description as comment
+        username=callback.from_user.username or callback.from_user.full_name,
+        retailer_name='',
+        items_list='',
+        payment_info='',
+        transaction_dt=datetime.now()
+    )
+    
+    # Finalize transaction using service
+    result = await service.finalize_transaction(transaction)
+    
+    if result['success']:
+        await callback.message.edit_text(result['summary'])
+    else:
+        await callback.message.edit_text(f"❌ **Ошибка записи в Google Sheets!** Ошибка: {result['error']}", parse_mode="Markdown")
     
     # Clear state
     await state.clear()
-    
-    # Edit message to confirm saving
-    await callback.message.edit_text("✅ Транзакция сохранена!")
 
 
 async def handle_cancel_tx(callback: types.CallbackQuery, state: FSMContext):
@@ -1425,6 +1477,10 @@ async def handle_cancel_tx(callback: types.CallbackQuery, state: FSMContext):
 async def handle_change_category(callback: types.CallbackQuery, state: FSMContext):
     """Handle changing category."""
     await safe_answer(callback)
+    
+    # Get transaction data from state to preserve the comment/description
+    data = await state.get_data()
+    original_description = data.get('description', '')
     
     # Get available categories
     from config import CATEGORY_STORAGE
@@ -1448,8 +1504,11 @@ async def handle_change_category(callback: types.CallbackQuery, state: FSMContex
         one_time_keyboard=True
     )
     
-    # Ask user to select a new category
-    await callback.message.answer("Выберите новую категорию:", reply_markup=keyboard)
+    # Ask user to select a new category, preserving the original description
+    if original_description:
+        await callback.message.answer(f"Текущий комментарий: '{original_description}'\n\nВыберите новую категорию:", reply_markup=keyboard)
+    else:
+        await callback.message.answer("Выберите новую категорию:", reply_markup=keyboard)
     await state.set_state(Transaction.waiting_for_category_selection)
 
 
@@ -1467,10 +1526,13 @@ async def handle_category_selection(message: types.Message, state: FSMContext):
     
     # Check if user wants to skip category
     if selected_category == "⏭️ Пропустить":
-        # Get data from state
+        # Get data from state - check both 'comment' and 'description' fields
         data = await state.get_data()
         amount = data.get('amount')
+        # Try to get comment from both possible fields
         comment = data.get('comment', '')
+        if not comment:
+            comment = data.get('description', '')
         
         # Initialize transaction service
         service = get_transaction_service()
@@ -1513,9 +1575,12 @@ async def handle_category_selection(message: types.Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, выберите категорию из предложенных вариантов.")
         return
     
-    # Get the original comment from state data
+    # Get the original comment from state data - check both 'comment' and 'description' fields
     data = await state.get_data()
+    # Try to get comment from both possible fields
     original_comment = data.get('comment', '')
+    if not original_comment:
+        original_comment = data.get('description', '')
     amount = data.get('amount')
     
     # Initialize transaction service
@@ -1542,8 +1607,12 @@ async def handle_category_selection(message: types.Message, state: FSMContext):
     result = await service.finalize_transaction(transaction)
     
     if result['success']:
+        # Clean up the keyboard before sending the final message
+        await clean_previous_kb(message.bot, state, message.chat.id)
         await message.answer(result['summary'])
     else:
+        # Clean up the keyboard before sending the error message
+        await clean_previous_kb(message.bot, state, message.chat.id)
         await message.answer(f"❌ **Ошибка записи в Google Sheets!** Ошибка: {result['error']}", parse_mode="Markdown")
     
     # Learn from this correction - associate the comment with the selected category

@@ -18,14 +18,26 @@ async def start_sync_worker(bot, repository: TransactionRepository, sheets_clien
             for transaction in unsynced_transactions:
                 try:
                     # Преобразование данных из SQLite в модель TransactionData
-                    transaction_data = TransactionData(
-                        type="Расход",  # По умолчанию для транзакций из SQLite
-                        category=transaction['category'],
-                        amount=transaction['amount'],
-                        comment=transaction['comment'] or '',
-                        username=f"user_{transaction['user_id']}",  # Генерация username
-                        transaction_dt=datetime.fromisoformat(transaction['created_at'].replace('Z', '+00:00')) if transaction['created_at'] else datetime.now()
-                    )
+                    # Проверяем, что amount - это число, а category - строка
+                    try:
+                        amount_value = float(transaction['amount'])
+                        # Убедимся, что category - это строка
+                        category_value = str(transaction['category']) if transaction['category'] is not None else ''
+                        
+                        transaction_data = TransactionData(
+                            type="Расход",  # По умолчанию для транзакций из SQLite
+                            category=category_value,
+                            amount=amount_value,
+                            comment=transaction['comment'] or '',
+                            username=transaction['username'] or f"user_{transaction['user_id']}",  # Используем реальное имя пользователя из базы данных
+                            transaction_dt=datetime.fromisoformat(transaction['created_at'].replace('Z', '+00:00')) if transaction['created_at'] else datetime.now()
+                        )
+                    except (ValueError, TypeError) as validation_error:
+                        logger.error(f"Неверный формат данных для транзакции {transaction['id']}: amount={transaction['amount']}, category={transaction['category']}")
+                        logger.debug(f"Стек вызова: {validation_error}")
+                        # Помечаем транзакцию как синхронизированную, чтобы избежать повторных ошибок
+                        await repository.mark_as_synced(transaction['id'])
+                        continue  # Переходим к следующей транзакции
                     
                     # Отправка в Google Sheets (асинхронный вызов)
                     await write_transaction(transaction_data)

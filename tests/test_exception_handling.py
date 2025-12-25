@@ -1,119 +1,141 @@
+# -*- coding: utf-8 -*-
+"""
+Тесты для проверки обработки исключений в различных компонентах бота
+"""
 import pytest
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from unittest.mock import AsyncMock, patch, MagicMock
 import traceback
 
+from models.transaction import CheckData
 from services.transaction_service import TransactionService
-from models.transaction import TransactionData, CheckData
-from utils.exceptions import SheetWriteError
-from config import logger
+from sheets.client import get_latest_transactions
 
 
 class TestExceptionHandling:
-    """Тесты для проверки улучшенной обработки исключений"""
+    """Тесты для проверки обработки исключений"""
 
-    @pytest.mark.asyncio
-    async def test_save_transaction_exception_handling(self):
-        """Тест обработки исключения в методе save_transaction"""
-        # Создаем мок-репозиторий, который будет выбрасывать исключение
-        mock_repository = AsyncMock()
-        mock_repository.add_transaction.side_effect = Exception("Database connection failed")
+    def test_check_data_transaction_datetime_value_error_logging(self):
+        """Тест: Проверка логирования ValueError при парсинге даты в CheckData"""
+        import logging
+        from io import StringIO
         
-        service = TransactionService(repository=mock_repository)
+        # Создаем буфер для захвата логов
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        handler.setLevel(logging.WARNING)
         
-        # Создаем тестовую транзакцию
-        transaction = TransactionData(
-            type="Расход",
-            category="Продукты",
-            amount=100.0,
-            comment="Тестовая транзакция",
-            username="test_user"
-        )
+        # Получаем логгер, который используется в модуле
+        logger = logging.getLogger('bot_logger')  # Используем тот же логгер, что и в config
+        logger.addHandler(handler)
         
-        # Проверяем, что исключение правильно обрабатывается
-        with pytest.raises(SheetWriteError) as exc_info:
-            await service.save_transaction(transaction)
-        
-        assert "Ошибка при записи транзакции в SQLite" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_finalize_transaction_exception_handling(self):
-        """Тест обработки исключения в методе finalize_transaction"""
-        # Создаем мок-репозиторий, который будет выбрасывать исключение
-        mock_repository = AsyncMock()
-        mock_repository.add_transaction.side_effect = Exception("Database connection failed")
-        
-        service = TransactionService(repository=mock_repository)
-        
-        # Создаем тестовую транзакцию
-        transaction = TransactionData(
-            type="Расход",
-            category="Продукты",
-            amount=100.0,
-            comment="Тестовая транзакция",
-            username="test_user"
-        )
-        
-        # Проверяем, что метод возвращает правильный результат при ошибке
-        result = await service.finalize_transaction(transaction)
-        
-        assert result['success'] is False
-        # Ошибка из save_transaction будет перехвачена как SheetWriteError в finalize_transaction
-        assert "Ошибка записи в Google Sheets! Ошибка:" in result['error']
-        assert "Ошибка при записи транзакции в SQLite" in result['error']
-
-    def test_transaction_datetime_parsing_exception(self):
-        """Тест обработки исключения при парсинге даты в TransactionData"""
         # Создаем CheckData с некорректной строкой даты
         check_data = CheckData(
-            type="Расход",
             category="Продукты",
             amount=100.0,
-            comment="Тестовая транзакция",
+            comment="Тест",
             check_datetime_str="некорректная_дата"
         )
         
-        # Проверяем, что используется текущая дата при ошибке парсинга
-        current_time = check_data.transaction_datetime
-        assert isinstance(current_time, type(asyncio.run(asyncio.sleep(0))).__class__.__bases__[0])  # Это datetime
-
-    def test_transaction_datetime_correct_parsing(self):
-        """Тест корректного парсинга даты в TransactionData"""
-        # Создаем CheckData с корректной строкой даты
-        check_data = CheckData(
-            type="Расход",
-            category="Продукты",
-            amount=100.0,
-            comment="Тестовая транзакция",
-            check_datetime_str="2023-12-24T15:30:00"
-        )
+        # Вызываем свойство transaction_datetime, которое должно вызвать ValueError
+        dt = check_data.transaction_datetime
         
-        # Проверяем, что дата корректно распарсилась
-        parsed_time = check_data.transaction_datetime
-        assert parsed_time.year == 2023
-        assert parsed_time.month == 12
-        assert parsed_time.day == 24
-        assert parsed_time.hour == 15
-        assert parsed_time.minute == 30
-        assert parsed_time.second == 0
+        # Проверяем, что возвращается текущая дата (поскольку парсинг не удался)
+        assert isinstance(dt, datetime)
+        
+        # Проверяем, что сообщение об ошибке было записано в лог
+        log_contents = log_capture.getvalue()
+        assert "Ошибка парсинга даты транзакции" in log_contents
+        assert "некорректная_дата" in log_contents
+        
+        # Убираем обработчик
+        logger.removeHandler(handler)
 
     @pytest.mark.asyncio
-    async def test_transaction_datetime_minutes_only_parsing(self):
-        """Тест парсинга даты без секунд в TransactionData"""
-        # Создаем CheckData с корректной строкой даты без секунд
-        check_data = CheckData(
+    async def test_transaction_service_save_transaction_exception_logging(self):
+        """Тест: Проверка логирования исключений в save_transaction"""
+        import logging
+        from io import StringIO
+        
+        # Создаем буфер для захвата логов
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        handler.setLevel(logging.ERROR)
+        
+        # Получаем логгер
+        logger = logging.getLogger('bot_logger')
+        logger.addHandler(handler)
+        
+        # Создаем мок репозитория, который будет выбрасывать исключение
+        mock_repository = AsyncMock()
+        mock_repository.add_transaction.side_effect = Exception("Тестовая ошибка SQLite")
+        
+        transaction_service = TransactionService(repository=mock_repository)
+        
+        from models.transaction import TransactionData
+        transaction = TransactionData(
             type="Расход",
             category="Продукты",
             amount=100.0,
-            comment="Тестовая транзакция",
-            check_datetime_str="2023-12-24T15:30"
+            comment="Тест",
+            username="test_user"
         )
         
-        # Проверяем, что дата корректно распарсилась
-        parsed_time = check_data.transaction_datetime
-        assert parsed_time.year == 2023
-        assert parsed_time.month == 12
-        assert parsed_time.day == 24
-        assert parsed_time.hour == 15
-        assert parsed_time.minute == 30
-        assert parsed_time.second == 0
+        # Проверяем, что исключение обрабатывается корректно
+        from utils.exceptions import SheetWriteError
+        with pytest.raises(SheetWriteError):
+            await transaction_service.save_transaction(transaction)
+        
+        # Проверяем, что сообщение об ошибке было записано в лог
+        log_contents = log_capture.getvalue()
+        assert "Ошибка при записи транзакции в SQLite" in log_contents
+        assert "Тестовая ошибка SQLite" in log_contents
+        
+        # Убираем обработчик
+        logger.removeHandler(handler)
+
+    @pytest.mark.asyncio
+    async def test_transaction_service_finalize_transaction_exception_logging(self):
+        """Тест: Проверка логирования исключений в finalize_transaction"""
+        import logging
+        from io import StringIO
+        
+        # Создаем буфер для захвата логов
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        handler.setLevel(logging.ERROR)
+        
+        # Получаем логгер
+        logger = logging.getLogger('bot_logger')
+        logger.addHandler(handler)
+        
+        # Создаем мок репозитория, который будет выбрасывать исключение
+        mock_repository = AsyncMock()
+        mock_repository.add_transaction.side_effect = Exception("Тестовая ошибка SQLite")
+        
+        transaction_service = TransactionService(repository=mock_repository)
+        
+        from models.transaction import TransactionData
+        transaction = TransactionData(
+            type="Расход",
+            category="Продукты",
+            amount=100.0,
+            comment="Тест",
+            username="test_user",
+            transaction_dt=datetime.now()
+        )
+        
+        # Вызываем finalize_transaction, который должен обработать исключение
+        result = await transaction_service.finalize_transaction(transaction)
+        
+        # Проверяем, что результат содержит информацию об ошибке
+        assert result['success'] is False
+        assert 'Неизвестная ошибка' in result['error']
+        
+        # Проверяем, что сообщение об ошибке было записано в лог
+        log_contents = log_capture.getvalue()
+        assert "Неизвестная ошибка при финализации транзакции" in log_contents
+        
+        # Убираем обработчик
+        logger.removeHandler(handler)

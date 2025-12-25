@@ -94,13 +94,22 @@ class TransactionService:
             if self.repository is None:
                 raise Exception("Repository not initialized for TransactionService")
             
-            # Извлекаем user_id из username (в реальной реализации user_id должен приходить из контекста пользователя)
-            # Для тестирования используем фиктивный user_id
+            # Валидируем данные перед сохранением
+            if not isinstance(transaction.amount, (int, float)) or transaction.amount is None:
+                raise SheetWriteError(f"Неверное значение суммы транзакции: {transaction.amount}")
+            
+            if not isinstance(transaction.category, str) or transaction.category is None:
+                raise SheetWriteError(f"Неверное значение категории транзакции: {transaction.category}")
+            
+            # Извлекаем user_id и username из контекста (в реальной реализации user_id и username должны приходить из контекста пользователя)
+            # Для тестирования используем фиктивные значения
             user_id = 1 # В реальной реализации это должно быть получено из контекста
+            username = transaction.username # Используем username из объекта транзакции
             
             # Записываем транзакцию в SQLite синхронно (First Write pattern)
             await self.repository.add_transaction(
                 user_id=user_id,
+                username=username,
                 amount=transaction.amount,
                 category=transaction.category,
                 comment=transaction.comment

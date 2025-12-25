@@ -6,6 +6,7 @@
 # sheets/client.py
 import asyncio
 import gspread
+import traceback
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from functools import lru_cache
@@ -511,6 +512,7 @@ async def get_latest_transactions(user_id: str, limit: int = 5, offset: int = 0)
             except ValueError as e:
                 # Если формат даты не распознан, возвращаем минимальную дату
                 logger.warning(f"Ошибка парсинга даты и времени: {e}")
+                logger.debug(f"Стек вызова: {traceback.format_exc()}")
                 return datetime.min
 
         user_transactions.sort(key=parse_datetime, reverse=True)

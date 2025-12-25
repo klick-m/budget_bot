@@ -3,6 +3,8 @@ from typing import List, Optional
 import sqlite3
 from contextlib import asynccontextmanager
 
+from config import logger
+
 
 class TransactionRepository:
     def __init__(self, db_path: str = "transactions.db"):
@@ -13,11 +15,14 @@ class TransactionRepository:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute("PRAGMA synchronous=NORMAL;")
+            
+            # Создаем таблицу, если она не существует
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS transactions (
                     id INTEGER PRIMARY KEY,
                     user_id INTEGER NOT NULL,
+                    username TEXT,
                     amount REAL NOT NULL,
                     category TEXT NOT NULL,
                     comment TEXT,
@@ -26,6 +31,16 @@ class TransactionRepository:
                 )
                 """
             )
+            
+            # Проверяем, существует ли столбец username, и добавляем его, если не существует
+            cursor = await db.execute("PRAGMA table_info(transactions)")
+            columns = await cursor.fetchall()
+            column_names = [column[1] for column in columns]
+            
+            if 'username' not in column_names:
+                await db.execute("ALTER TABLE transactions ADD COLUMN username TEXT")
+                logger.info("Добавлен столбец username в таблицу transactions")
+            
             await db.commit()
 
     @asynccontextmanager
@@ -34,15 +49,15 @@ class TransactionRepository:
         async with aiosqlite.connect(self.db_path) as db:
             yield db
 
-    async def add_transaction(self, user_id: int, amount: float, category: str, comment: Optional[str] = None) -> int:
+    async def add_transaction(self, user_id: int, username: str, amount: float, category: str, comment: Optional[str] = None) -> int:
         """Add a new transaction and return its ID."""
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """
-                INSERT INTO transactions (user_id, amount, category, comment)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO transactions (user_id, username, amount, category, comment)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (user_id, amount, category, comment)
+                (user_id, username, amount, category, comment)
             )
             transaction_id = cursor.lastrowid
             await db.commit()
@@ -53,7 +68,7 @@ class TransactionRepository:
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """
-                SELECT id, user_id, amount, category, comment, created_at, is_synced
+                SELECT id, user_id, username, amount, category, comment, created_at, is_synced
                 FROM transactions
                 WHERE is_synced = 0
                 ORDER BY created_at
