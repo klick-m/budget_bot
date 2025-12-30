@@ -197,6 +197,20 @@ async def parse_check_from_api(image_data: bytes, session: Optional[aiohttp.Clie
                             item_names = [item['name'] for item in items]
                             items_list_str = " | ".join(item_names)
                             
+                            # Парсим товары в объекты CheckItem
+                            parsed_items = []
+                            from models.transaction import CheckItem
+                            for item in items:
+                                try:
+                                    parsed_items.append(CheckItem(
+                                        name=item['name'],
+                                        price=item.get('price', 0) / 100,
+                                        quantity=item.get('quantity', 1),
+                                        sum=item.get('sum', 0) / 100
+                                    ))
+                                except Exception as e:
+                                    logger.warning(f"Ошибка парсинга товара чека: {item}. Error: {e}")
+
                             # Определение типа оплаты
                             if check_data.get('ecashTotalSum', 0) > 0:
                                 payment_info = "Карта/Электронный платеж"
@@ -215,6 +229,7 @@ async def parse_check_from_api(image_data: bytes, session: Optional[aiohttp.Clie
                                 comment=items_list_str,
                                 retailer_name=retailer,
                                 items_list=items_list_str,
+                                items=parsed_items,
                                 payment_info=payment_info,
                                 check_datetime_str=check_data.get('dateTime')
                             )

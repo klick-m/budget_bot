@@ -15,14 +15,13 @@ Budget Bot — это Telegram-бот для учета финансов, пос
     * Обработка фотографий и файлов.
     * Взаимодействие с API распознавания чеков.
     * FSM сценарии для подтверждения/корректировки данных чека.
-* **`handlers/manual_input.py`**:
+* **`handlers/manual.py`**:
     * Ручной ввод транзакций (FSM).
     * "Умный ввод" (Smart Input) через естественный язык ("кофе 300").
     * Работа с черновиками транзакций.
-* **`handlers/history.py`**:
-    * Команда `/history`.
-    * Пагинация и отображение списков.
 * **`handlers/common.py`**:
+    * Команда `/undo`.
+    * Отображение и удаление последних транзакций.
     * Базовые команды: `/start`, `/help`, `/cancel`.
     * Регистрация общих меню.
 
@@ -47,10 +46,32 @@ Budget Bot — это Telegram-бот для учета финансов, пос
     * Работа с SQLite (aiosqlite).
     * CRUD операции.
     * Управление статусом синхронизации (`is_synced`).
+    * Методы для удаления транзакций по деталям.
 * **`GoogleSheetsClient`**:
     * Асинхронный клиент (gspread).
     * Очередь записи.
     * Обработка Rate Limits.
+
+### 4. Service Layer (Business Logic)
+Слой бизнес-логики. Не зависит от Telegram API. Работает с Pydantic-моделями (DTO).
+
+* **`TransactionService`**:
+    * Центральный оркестратор.
+    * Валидация данных.
+    * Вызов ML-классификации.
+    * Сохранение через репозиторий.
+    * Удаление транзакций по деталям.
+* **`CategoryService`** (вместо `CATEGORY_STORAGE`):
+    * Управление списком категорий и ключевых слов.
+    * Кэширование и обновление справочников.
+* **`ReceiptRecognitionService`**:
+    * Изолированная логика работы с внешним API чеков.
+
+### 5. Data Models & DTO
+**Принцип:** Четкое разделение между моделями данных и DTO.
+1.  **Pydantic DTO:** Все бизнес-модели (Transaction, Category и т.д.) реализованы как Pydantic-модели для валидации данных и сериализации.
+2.  **Database Models:** Модели для работы с SQLite (SQLAlchemy или aiosqlite row objects) не должны смешиваться с бизнес-моделями.
+3.  **API DTO:** Отдельные модели для взаимодействия с внешними API (чеков, Google Sheets).
 
 ## Ключевые архитектурные решения
 
@@ -75,6 +96,7 @@ Budget Bot — это Telegram-бот для учета финансов, пос
 3.  **Classification:** TF-IDF взвешивание -> Определение категории.
 4.  **Feedback:** Если пользователь меняет категорию вручную, модель дообучается на этом примере.
 
+
 ## Структура проекта (Target)
 
 ```text
@@ -85,12 +107,12 @@ budget_bot/
 │   ├── __init__.py
 │   ├── common.py
 │   ├── receipts.py
-│   ├── manual_input.py
-│   └── history.py
+│   ├── manual.py
+│   └── __init__.py
 ├── services/                  # Бизнес-логика
 │   ├── transaction_service.py
 │   ├── category_service.py
-│   └── ...
+│   └── receipt_recognition_service.py
 ├── models/                    # Pydantic DTO
 ├── database/                  # SQLite репозитории
 ├── sheets/                    # GSheets интеграция

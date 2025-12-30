@@ -39,11 +39,12 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+# Удаляем устаревшую функцию get_history_keyboard
 def get_history_keyboard(offset: int, has_next: bool) -> InlineKeyboardMarkup:
     """Генерирует Inline-клавиатуру с кнопками пагинации для истории транзакций."""
     keyboard = []
     row = []
-    
+
     # Кнопка "Назад", если смещение больше 0
     if offset > 0:
         prev_offset = max(0, offset - 5) # Предыдущее смещение (шаг 5)
@@ -52,7 +53,7 @@ def get_history_keyboard(offset: int, has_next: bool) -> InlineKeyboardMarkup:
             callback_data=HistoryCallbackData(offset=prev_offset, direction="prev").pack()
         )
         row.append(back_button)
-    
+
     # Кнопка "Вперед", если есть следующие транзакции
     if has_next:
         next_offset = offset + 5  # Следующее смещение (шаг 5)
@@ -64,15 +65,15 @@ def get_history_keyboard(offset: int, has_next: bool) -> InlineKeyboardMarkup:
             row.append(forward_button)
         else: # Иначе создаем новый ряд с кнопкой "Вперед"
             keyboard.append([forward_button])
-    
+
     # Добавляем кнопки в клавиатуру
     if row:
         keyboard.append(row)
-    
+
     # Добавляем кнопку "Закрыть" на отдельной строке
     close_button = [InlineKeyboardButton(text="❌ Закрыть", callback_data="close_history")]
     keyboard.append(close_button)
-    
+
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 

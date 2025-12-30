@@ -8,6 +8,8 @@ from typing import List, Dict, Tuple, Optional
 from collections import defaultdict, Counter
 import math
 from datetime import datetime
+import pickle
+import os
 
 try:
     from pymorphy3 import MorphAnalyzer
@@ -17,6 +19,8 @@ except ImportError:
 from models.transaction import TransactionData
 from models.keyword_dictionary import KeywordDictionary
 from config import logger, KEYWORDS_SPREADSHEET_ID, KEYWORDS_SHEET_NAME
+
+MODEL_FILE_PATH = "category_classifier_model.pkl"
 
 
 class TransactionCategoryClassifier:
@@ -64,6 +68,9 @@ class TransactionCategoryClassifier:
         if not hasattr(self.keyword_dict, 'morph_analyzer'):
             self.keyword_dict._initialize_morph_analyzer()
             
+        # Загружаем сохраненную модель, если есть
+        self.load_model()
+            
     async def load(self):
         """Асинхронная инициализация KeywordDictionary"""
         try:
@@ -79,8 +86,45 @@ class TransactionCategoryClassifier:
             
         except Exception as e:
             logger.error(f"❌ Ошибка при инициализации KeywordDictionary: {e}")
+
+    def save_model(self):
+        """Сохранение состояния модели в файл"""
+        try:
+            model_state = {
+                'category_features': dict(self.category_features),  # Конвертируем defaultdict в dict для pickle
+                'global_features': dict(self.global_features),
+                'category_transactions_count': dict(self.category_transactions_count),
+                'categories': self.categories,
+                'total_transactions': self.total_transactions
+            }
+            with open(MODEL_FILE_PATH, 'wb') as f:
+                pickle.dump(model_state, f)
+            logger.info(f"💾 ML-модель успешно сохранена в {MODEL_FILE_PATH}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при сохранении модели: {e}")
+
+    def load_model(self):
+        """Загрузка состояния модели из файла"""
+        if not os.path.exists(MODEL_FILE_PATH):
+            return
+
+        try:
+            with open(MODEL_FILE_PATH, 'rb') as f:
+                model_state = pickle.load(f)
             
-    # Удаляем старый метод delayed_init, так как он заменен на async_init
+            # Восстанавливаем defaultdict'ы
+            self.category_features = defaultdict(lambda: defaultdict(int))
+            for cat, features in model_state.get('category_features', {}).items():
+                self.category_features[cat] = defaultdict(int, features)
+                
+            self.global_features = defaultdict(int, model_state.get('global_features', {}))
+            self.category_transactions_count = defaultdict(int, model_state.get('category_transactions_count', {}))
+            self.categories = model_state.get('categories', set())
+            self.total_transactions = model_state.get('total_transactions', 0)
+            
+            logger.info(f"📂 ML-модель загружена из {MODEL_FILE_PATH} ({self.total_transactions} trx)")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при загрузке модели: {e}")
          
     def extract_features(self, text: str) -> List[str]:
         """
@@ -176,7 +220,9 @@ class TransactionCategoryClassifier:
             )
             self.category_keywords[category] = [feature for feature, _ in sorted_features[:10]]
         
+        
         logger.info(f"Обучение завершено. Обнаружено {len(self.categories)} категорий")
+        self.save_model()
     
     def _calculate_tfidf(self, feature: str, category: str) -> float:
         """
@@ -203,9 +249,18 @@ class TransactionCategoryClassifier:
         Предсказание категории для новой транзакции с возвратом уверенности
         """
         text = f"{transaction.comment} {transaction.retailer_name} {transaction.items_list}"
+        
+        # 1. Сначала проверяем точные совпадения по ключевым словам
+        if hasattr(self, 'keyword_dict'):
+            keyword_result = self.keyword_dict.get_category_by_keyword(text)
+            if keyword_result:
+                return keyword_result
+
+        # 2. Если точных совпадений нет, используем ML
         features = self.extract_features(text)
         
         scores = {}
+        has_matching_features = False
         
         for category in self.categories:
             # Счетчик для этой категории
@@ -216,13 +271,12 @@ class TransactionCategoryClassifier:
             for feature in features:
                 if category_total_features > 0:
                     # Вероятность признака в данной категории
-                    feature_prob = self.category_features[category][feature] / category_total_features
-                    # Добавляем к оценке с использованием TF-IDF
-                    tfidf = self._calculate_tfidf(feature, category)
-                    category_score += feature_prob * (1 + tfidf)
-                else:
-                    # Если в категории нет признаков, пропускаем этот признак
-                    continue
+                    if self.category_features[category][feature] > 0:
+                        has_matching_features = True
+                        feature_prob = self.category_features[category][feature] / category_total_features
+                        # Добавляем к оценке с использованием TF-IDF
+                        tfidf = self._calculate_tfidf(feature, category)
+                        category_score += feature_prob * (1 + tfidf)
             
             # Учитываем априорную вероятность категории
             prior_prob = self.category_transactions_count[category] / self.total_transactions if self.total_transactions > 0 else 0
@@ -230,9 +284,10 @@ class TransactionCategoryClassifier:
         
         if not scores:
             # Если не найдено ни одной подходящей категории, возвращаем наиболее частую
+            # Но с нулевой уверенностью, чтобы не подставлять её автоматически, если это не обосновано
             if self.category_transactions_count:
                 most_common_category = max(self.category_transactions_count, key=self.category_transactions_count.get)
-                return most_common_category, 0.5
+                return most_common_category, 0.0 # Было 0.5, теперь 0.0
             else:
                 return "Прочее Расход", 0.0
         
@@ -240,6 +295,11 @@ class TransactionCategoryClassifier:
         best_category = max(scores, key=scores.get)
         max_score = scores[best_category]
         
+        # Если не было совпадений по признакам, значит сработала только априорная вероятность (prior_prob)
+        # В этом случае мы не должны быть уверены в прогнозе
+        if not has_matching_features:
+            return best_category, 0.0
+
         # Нормализуем оценку в диапазон [0, 1]
         if max_score > 0:
             # Используем softmax-подобное преобразование для нормализации
@@ -318,10 +378,11 @@ class TransactionCategoryClassifier:
             if normalized_text not in self.category_keywords[category]:
                 self.category_keywords[category].append(normalized_text)
             # Также добавляем лемму, если она отличается
-            if lemmatized_text != normalized_text and lemmatized_text not in self.category_keywords[category]:
+        if lemmatized_text != normalized_text and lemmatized_text not in self.category_keywords[category]:
                 self.category_keywords[category].append(lemmatized_text)
         
         logger.info(f"Добавлено новое ключевое слово: '{normalized_text}' -> '{category}' (с леммой: '{lemmatized_text}')")
+        self.save_model()
 
     def predict(self, text: str) -> str:
         """

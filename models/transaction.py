@@ -6,16 +6,24 @@ from typing import Optional, Literal # <--- Добавлен Literal
 
 from config import logger
 
+class CheckItem(BaseModel):
+    """Модель отдельной позиции в чеке."""
+    name: str
+    price: float
+    quantity: float
+    sum: float
+
 class CheckData(BaseModel):
     """Модель данных, извлекаемых из API чека."""
-    # Используем Literal для указания, что значение может быть только "Расход"
-    type: Literal["Расход"] = Field('Расход')
+    # Используем Literal для указания, что значение может быть "Расход" или "Доход"
+    type: Literal["Расход", "Доход"] = Field('Расход')
     
     category: str
     amount: float = Field(..., gt=0, le=100000)  # Ограничение максимальной суммы
     comment: str
     retailer_name: str = ''
-    items_list: str = ''
+    items_list: str = '' # Строковое представление для истории
+    items: list[CheckItem] = Field(default_factory=list) # Структурированный список товаров
     payment_info: str = ''
     check_datetime_str: Optional[str] = None # Дата в сыром виде из API
 
@@ -43,6 +51,7 @@ class TransactionData(BaseModel):
     amount: float
     comment: str = ""
     username: str
+    user_id: Optional[int] = None # Added user_id
     retailer_name: str = ""
     items_list: str = ""
     payment_info: str = ""

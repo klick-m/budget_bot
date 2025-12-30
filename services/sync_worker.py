@@ -10,22 +10,28 @@ logger = logging.getLogger(__name__)
 
 
 async def start_sync_worker(bot, repository: TransactionRepository, sheets_client):
+    logger.info("Sync worker started.")
     while True:
         try:
-            await asyncio.sleep(60)
+            # Сначала проверяем, есть ли что-то для синхронизации
             unsynced_transactions = await repository.get_unsynced()
+            
+            if unsynced_transactions:
+                logger.info(f"Найдено {len(unsynced_transactions)} несинхронизированных транзакций. Начинаю процесс...")
             
             for transaction in unsynced_transactions:
                 try:
                     # Преобразование данных из SQLite в модель TransactionData
                     # Проверяем, что amount - это число, а category - строка
                     try:
-                        amount_value = float(transaction['amount'])
+                        # Обработка строки суммы: замена запятой на точку и удаление пробелов
+                        amount_raw = str(transaction['amount']).replace(',', '.').replace(' ', '').replace('\xa0', '')
+                        amount_value = float(amount_raw)
                         # Убедимся, что category - это строка
                         category_value = str(transaction['category']) if transaction['category'] is not None else ''
                         
                         transaction_data = TransactionData(
-                            type="Расход",  # По умолчанию для транзакций из SQLite
+                            type=transaction.get('type', 'Расход'),  # Получаем тип из БД
                             category=category_value,
                             amount=amount_value,
                             comment=transaction['comment'] or '',
@@ -35,14 +41,13 @@ async def start_sync_worker(bot, repository: TransactionRepository, sheets_clien
                     except (ValueError, TypeError) as validation_error:
                         logger.error(f"Неверный формат данных для транзакции {transaction['id']}: amount={transaction['amount']}, category={transaction['category']}")
                         logger.debug(f"Стек вызова: {validation_error}")
-                        # Помечаем транзакцию как синхронизированную, чтобы избежать повторных ошибок
-                        await repository.mark_as_synced(transaction['id'])
+                        # НЕ помечаем как синхронизированную, чтобы админ мог исправить данные в БД
                         continue  # Переходим к следующей транзакции
                     
                     # Отправка в Google Sheets (асинхронный вызов)
                     await write_transaction(transaction_data)
                     
-                    # Пометка как синхронизированной при успехе
+                    # Пометка как синхронизированной ТОЛЬКО при успехе
                     await repository.mark_as_synced(transaction['id'])
                     
                 except Exception as e:
@@ -50,7 +55,10 @@ async def start_sync_worker(bot, repository: TransactionRepository, sheets_clien
                     # Транзакция остается несинхронизированной и будет повторена в следующий раз
                     logger.error(f"Failed to sync transaction {transaction['id']} to Google Sheets: {e}")
                     logger.debug(f"Transaction details: {transaction}")
-                    
+            
+            # Ждем перед следующей проверкой
+            await asyncio.sleep(60)
+            
         except Exception as e:
             # Общие ошибки воркера также логируются, но не крашат бота
             logger.error(f"Sync worker error: {e}")
