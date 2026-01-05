@@ -34,24 +34,24 @@ class TestErrorHandler:
         
         # Мокаем edit_or_send
         with patch('handlers.common.edit_or_send') as mock_edit_or_send:
-            # Мокаем TransactionService, чтобы он возвращал None
-            with patch('handlers.common.get_transaction_service') as mock_get_service:
-                mock_get_service.return_value = None
-                
-                # Вызываем хендлер
-                await undo_callback_handler(callback)
-                
-                # Проверяем, что edit_or_send был вызван с правильными параметрами
-                mock_edit_or_send.assert_called()
-                # Проверяем, что хотя бы один из вызовов содержит нужный текст
-                calls = mock_edit_or_send.call_args_list
-                found_correct_call = False
-                for call in calls:
-                    args, kwargs = call
-                    if len(args) >= 3 and "❌ Критическая ошибка: TransactionService не инициализирован" in args[2]:  # text аргумент
-                        found_correct_call = True
-                        break
-                assert found_correct_call, "edit_or_send должен быть вызван с правильным текстом ошибки"
+            # Создаем мок-сервис, который вернет None при вызове delete_transaction_by_details
+            mock_service = Mock(spec=TransactionService)
+            mock_service.delete_transaction_by_details = AsyncMock(return_value=None)
+            
+            # Вызываем хендлер с мок-сервисом
+            await undo_callback_handler(callback, mock_service)
+            
+            # Проверяем, что edit_or_send был вызван с правильными параметрами
+            mock_edit_or_send.assert_called()
+            # Проверяем, что хотя бы один из вызовов содержит нужный текст
+            calls = mock_edit_or_send.call_args_list
+            found_correct_call = False
+            for call in calls:
+                args, kwargs = call
+                if len(args) >= 3 and "❌ Ошибка при удалении транзакции:" in args[2]:  # text аргумент
+                    found_correct_call = True
+                    break
+            assert found_correct_call, "edit_or_send должен быть вызван с правильным текстом ошибки"
     
     @pytest.mark.asyncio
     async def test_undo_callback_handler_with_exception(self):
@@ -75,21 +75,20 @@ class TestErrorHandler:
             mock_service = Mock(spec=TransactionService)
             mock_service.delete_transaction_by_details = AsyncMock(side_effect=Exception("Database connection failed"))
             
-            with patch('handlers.common.get_transaction_service', return_value=mock_service):
-                # Вызываем хендлер
-                await undo_callback_handler(callback)
-                
-                # Проверяем, что edit_or_send был вызван с правильными параметрами
-                mock_edit_or_send.assert_called()
-                # Проверяем, что хотя бы один из вызовов содержит нужный текст
-                calls = mock_edit_or_send.call_args_list
-                found_correct_call = False
-                for call in calls:
-                    args, kwargs = call
-                    if len(args) >= 3 and "❌ Ошибка при удалении транзакции: Database connection failed" in args[2]:  # text аргумент
-                        found_correct_call = True
-                        break
-                assert found_correct_call, "edit_or_send должен быть вызван с правильным текстом ошибки"
+            # Вызываем хендлер с мок-сервисом
+            await undo_callback_handler(callback, mock_service)
+            
+            # Проверяем, что edit_or_send был вызван с правильными параметрами
+            mock_edit_or_send.assert_called()
+            # Проверяем, что хотя бы один из вызовов содержит нужный текст
+            calls = mock_edit_or_send.call_args_list
+            found_correct_call = False
+            for call in calls:
+                args, kwargs = call
+                if len(args) >= 3 and "❌ Ошибка при удалении транзакции: Database connection failed" in args[2]:  # text аргумент
+                    found_correct_call = True
+                    break
+            assert found_correct_call, "edit_or_send должен быть вызван с правильным текстом ошибки"
     
     @pytest.mark.asyncio
     async def test_close_undo_handler_with_delete_error(self):
@@ -135,11 +134,14 @@ class TestErrorHandler:
         message.answer = AsyncMock()
         message.bot = Mock()
         
+        # Создаем мок-сервис
+        mock_service = Mock(spec=TransactionService)
+        
         # Вызываем хендлер
         state = Mock(spec=FSMContext)
         state.clear = AsyncMock()
         
-        await handle_photo(message, state)
+        await handle_photo(message, state, mock_service)
         
         # Проверяем, что было отправлено сообщение об ошибке
         message.answer.assert_called_once()
@@ -174,16 +176,16 @@ class TestErrorHandler:
         
         # Мокаем edit_or_send
         with patch('handlers.manual.edit_or_send') as mock_edit_or_send:
-            # Мокаем TransactionService, чтобы он возвращал None
-            with patch('handlers.manual.get_transaction_service') as mock_get_service:
-                mock_get_service.return_value = None
-                
-                # Вызываем хендлер
-                await confirm_manual_transaction(callback, state)
-                
-                # Проверяем, что edit_or_send был вызван хотя бы один раз
-                # (в случае ошибки сервиса должно быть как минимум 1 обращение к edit_or_send)
-                assert mock_edit_or_send.call_count >= 1, "edit_or_send должен быть вызван хотя бы один раз"
+            # Создаем мок-сервис, который выбросит исключение
+            mock_service = Mock(spec=TransactionService)
+            mock_service.finalize_transaction = AsyncMock(side_effect=Exception("Service not initialized"))
+            
+            # Вызываем хендлер с мок-сервисом
+            await confirm_manual_transaction(callback, state, mock_service)
+            
+            # Проверяем, что edit_or_send был вызван хотя бы один раз
+            # (в случае ошибки сервиса должно быть как минимум 1 обращение к edit_or_send)
+            assert mock_edit_or_send.call_count >= 1, "edit_or_send должен быть вызван хотя бы один раз"
     
     @pytest.mark.asyncio
     async def test_confirm_manual_transaction_with_exception(self):
@@ -217,24 +219,23 @@ class TestErrorHandler:
             mock_service = Mock(spec=TransactionService)
             mock_service.finalize_transaction = AsyncMock(side_effect=Exception("Network error"))
             
-            with patch('handlers.manual.get_transaction_service', return_value=mock_service):
-                # Вызываем хендлер
-                await confirm_manual_transaction(callback, state)
-                
-                # Проверяем, что edit_or_send был вызван с правильными параметрами
-                mock_edit_or_send.assert_called()
-                # Проверяем, что хотя бы один из вызовов содержит нужный текст
-                calls = mock_edit_or_send.call_args_list
-                found_correct_call = False
-                for call in calls:
-                    args, kwargs = call
-                    if len(args) >= 3 and (
-                        "❌ **Ошибка при сохранении транзакции:** Network error" in args[2] or
-                        "❌ **Критическая ошибка:**" in args[2]
-                    ):  # text аргумент
-                        found_correct_call = True
-                        break
-                assert found_correct_call, "edit_or_send должен быть вызван с правильным текстом ошибки"
+            # Вызываем хендлер с мок-сервисом
+            await confirm_manual_transaction(callback, state, mock_service)
+            
+            # Проверяем, что edit_or_send был вызван с правильными параметрами
+            mock_edit_or_send.assert_called()
+            # Проверяем, что хотя бы один из вызовов содержит нужный текст
+            calls = mock_edit_or_send.call_args_list
+            found_correct_call = False
+            for call in calls:
+                args, kwargs = call
+                if len(args) >= 3 and (
+                    "❌ **Ошибка при сохранении транзакции:** Network error" in args[2] or
+                    "❌ **Критическая ошибка:**" in args[2]
+                ):  # text аргумент
+                    found_correct_call = True
+                    break
+            assert found_correct_call, "edit_or_send должен быть вызван с правильным текстом ошибки"
     
     @pytest.mark.asyncio
     async def test_confirm_smart_transaction_with_service_error(self):
@@ -264,16 +265,16 @@ class TestErrorHandler:
         
         # Мокаем edit_or_send
         with patch('handlers.smart_input.edit_or_send') as mock_edit_or_send:
-            # Мокаем TransactionService, чтобы он возвращал None
-            with patch('handlers.smart_input.get_transaction_service') as mock_get_service:
-                mock_get_service.return_value = None
-                
-                # Вызываем хендлер
-                await confirm_smart_transaction(callback, state)
-                
-                # Проверяем, что edit_or_send был вызван хотя бы один раз
-                # (в случае ошибки сервиса должно быть как минимум 1 обращение к edit_or_send)
-                assert mock_edit_or_send.call_count >= 1, "edit_or_send должен быть вызван хотя бы один раз"
+            # Создаем мок-сервис, который выбросит исключение
+            mock_service = Mock(spec=TransactionService)
+            mock_service.finalize_transaction = AsyncMock(side_effect=Exception("Service not initialized"))
+            
+            # Вызываем хендлер с мок-сервисом
+            await confirm_smart_transaction(callback, state, mock_service)
+            
+            # Проверяем, что edit_or_send был вызван хотя бы один раз
+            # (в случае ошибки сервиса должно быть как минимум 1 обращение к edit_or_send)
+            assert mock_edit_or_send.call_count >= 1, "edit_or_send должен быть вызван хотя бы один раз"
     
     @pytest.mark.asyncio
     async def test_confirm_smart_transaction_with_exception(self):
@@ -307,21 +308,20 @@ class TestErrorHandler:
             mock_service = Mock(spec=TransactionService)
             mock_service.finalize_transaction = AsyncMock(side_effect=Exception("API error"))
             
-            with patch('handlers.smart_input.get_transaction_service', return_value=mock_service):
-                # Вызываем хендлер
-                await confirm_smart_transaction(callback, state)
-                
-                # Проверяем, что edit_or_send был вызван с правильными параметрами
-                mock_edit_or_send.assert_called()
-                # Проверяем, что хотя бы один из вызовов содержит нужный текст
-                calls = mock_edit_or_send.call_args_list
-                found_correct_call = False
-                for call in calls:
-                    args, kwargs = call
-                    if len(args) >= 3 and (
-                        "❌ **Ошибка при сохранении транзакции:** API error" in args[2] or
-                        "❌ **Критическая ошибка:**" in args[2]
-                    ):  # text аргумент
-                        found_correct_call = True
-                        break
-                assert found_correct_call, "edit_or_send должен быть вызван с правильным текстом ошибки"
+            # Вызываем хендлер с мок-сервисом
+            await confirm_smart_transaction(callback, state, mock_service)
+            
+            # Проверяем, что edit_or_send был вызван с правильными параметрами
+            mock_edit_or_send.assert_called()
+            # Проверяем, что хотя бы один из вызовов содержит нужный текст
+            calls = mock_edit_or_send.call_args_list
+            found_correct_call = False
+            for call in calls:
+                args, kwargs = call
+                if len(args) >= 3 and (
+                    "❌ **Ошибка при сохранении транзакции:** API error" in args[2] or
+                    "❌ **Критическая ошибка:**" in args[2]
+                ):  # text аргумент
+                    found_correct_call = True
+                    break
+            assert found_correct_call, "edit_or_send должен быть вызван с правильным текстом ошибки"

@@ -48,25 +48,13 @@ class TransactionCategoryClassifier:
         
         # Интеграция с новой системой KeywordDictionary
         if keyword_dict is None:
-            # Создаем пустой экземпляр на время инициализации
-            self.keyword_dict = KeywordDictionary.__new__(KeywordDictionary)
-            self.keyword_dict.spreadsheet_id = KEYWORDS_SPREADSHEET_ID
-            self.keyword_dict.sheet_name = KEYWORDS_SHEET_NAME
-            self.keyword_dict.category_keywords = defaultdict(list)
-            self.keyword_dict.keyword_to_category = {}
-            self.keyword_dict.bigram_to_category = {}
-            self.keyword_dict.unigram_to_categories = {}
-            self.keyword_dict.usage_stats = Counter()
-            self.keyword_dict.last_update = None
-            self.keyword_dict.sheets_client = None
-            # Инициализируем morph_analyzer для пустого экземпляра
-            self.keyword_dict._initialize_morph_analyzer()
+            # Создаем полноценный экземпляр KeywordDictionary
+            self.keyword_dict = KeywordDictionary(
+                spreadsheet_id=KEYWORDS_SPREADSHEET_ID,
+                sheet_name=KEYWORDS_SHEET_NAME
+            )
         else:
             self.keyword_dict = keyword_dict
-            
-        # Убедимся, что morph_analyzer инициализирован для keyword_dict
-        if not hasattr(self.keyword_dict, 'morph_analyzer'):
-            self.keyword_dict._initialize_morph_analyzer()
             
         # Загружаем сохраненную модель, если есть
         self.load_model()

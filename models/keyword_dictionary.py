@@ -11,6 +11,7 @@ except ImportError:
 
 from config import logger
 from sheets.client import GoogleSheetsClient
+from utils.lemmatizer import Lemmatizer
 
 
 @dataclass
@@ -61,21 +62,13 @@ class KeywordDictionary:
         # Дата последнего обновления
         self.last_update: Optional[datetime] = None
         
-        # Инициализация MorphAnalyzer для лемматизации
-        self._initialize_morph_analyzer()
+        # Инициализация Lemmatizer для лемматизации
+        self.lemmatizer = Lemmatizer()
     
     def _initialize_morph_analyzer(self):
         """Метод для инициализации morph_analyzer, который можно вызывать отдельно"""
-        try:
-            if MorphAnalyzer:
-                self.morph_analyzer = MorphAnalyzer()
-                logger.info("✅ pymorphy3 MorphAnalyzer инициализирован")
-            else:
-                logger.warning("⚠️ pymorphy3 не установлен, лемматизация будет недоступна")
-                self.morph_analyzer = None
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось инициализировать pymorphy3 MorphAnalyzer: {e}")
-            self.morph_analyzer = None
+        # Этот метод больше не используется, так как лемматизация вынесена в отдельный класс
+        pass
     
     def load_from_sheets(self):
         """Загрузка данных из Google Sheets"""
@@ -101,18 +94,19 @@ class KeywordDictionary:
                     
                     # Создаем новый или обновляем существующий элемент
                     if keyword in self.keyword_to_category:
-                        # Обновляем существующий элемент
-                        entry = self.keyword_to_category[keyword]
-                        entry.category = category
-                        entry.confidence = confidence
+                       # Обновляем существующий элемент
+                       entry = self.keyword_to_category[keyword]
+                       self._validate_keyword_entry(entry, f" при обновлении из таблицы для ключа '{keyword}'")
+                       entry.category = category
+                       entry.confidence = confidence
                     else:
-                        # Создаем новый элемент
-                        entry = KeywordEntry(
-                            keyword=keyword,
-                            category=category,
-                            confidence=confidence
-                        )
-                        self.keyword_to_category[keyword] = entry
+                       # Создаем новый элемент
+                       entry = KeywordEntry(
+                           keyword=keyword,
+                           category=category,
+                           confidence=confidence
+                       )
+                       self.keyword_to_category[keyword] = entry
                     
                     # Добавляем в категорию
                     self.category_keywords[category].append(entry)
@@ -122,12 +116,14 @@ class KeywordDictionary:
                     for word in words:
                         if word not in self.unigram_to_categories:
                             self.unigram_to_categories[word] = []
+                        self._validate_keyword_entry(entry, f" при добавлении в униграммы из таблицы для слова '{word}'")
                         self.unigram_to_categories[word].append(entry)
                     
                     # Добавляем биграммы, если слов в фразе больше одного
                     if len(words) > 1:
                         for i in range(len(words) - 1):
                             bigram = f"{words[i]} {words[i + 1]}"
+                            self._validate_keyword_entry(entry, f" при добавлении в биграммы из таблицы '{bigram}'")
                             self.bigram_to_category[bigram] = entry
             
             self.last_update = datetime.now()
@@ -161,18 +157,19 @@ class KeywordDictionary:
                     
                     # Создаем новый или обновляем существующий элемент
                     if keyword in self.keyword_to_category:
-                        # Обновляем существующий элемент
-                        entry = self.keyword_to_category[keyword]
-                        entry.category = category
-                        entry.confidence = confidence
+                       # Обновляем существующий элемент
+                       entry = self.keyword_to_category[keyword]
+                       self._validate_keyword_entry(entry, f" при асинхронном обновлении из таблицы для ключа '{keyword}'")
+                       entry.category = category
+                       entry.confidence = confidence
                     else:
-                        # Создаем новый элемент
-                        entry = KeywordEntry(
-                            keyword=keyword,
-                            category=category,
-                            confidence=confidence
-                        )
-                        self.keyword_to_category[keyword] = entry
+                       # Создаем новый элемент
+                       entry = KeywordEntry(
+                           keyword=keyword,
+                           category=category,
+                           confidence=confidence
+                       )
+                       self.keyword_to_category[keyword] = entry
                     
                     # Добавляем в категорию
                     self.category_keywords[category].append(entry)
@@ -182,25 +179,29 @@ class KeywordDictionary:
                     for word in words:
                         if word not in self.unigram_to_categories:
                             self.unigram_to_categories[word] = []
+                        self._validate_keyword_entry(entry, f" при добавлении в униграммы при асинхронной загрузке для слова '{word}'")
                         self.unigram_to_categories[word].append(entry)
                     
                     # Добавляем биграммы, если слов в фразе больше одного
                     if len(words) > 1:
                         for i in range(len(words) - 1):
                             bigram = f"{words[i]} {words[i + 1]}"
+                            self._validate_keyword_entry(entry, f" при добавлении в биграммы при асинхронной загрузке '{bigram}'")
                             self.bigram_to_category[bigram] = entry
             
             self.last_update = datetime.now()
             
-            # Убедимся, что morph_analyzer инициализирован
-            if not hasattr(self, 'morph_analyzer'):
-                self._initialize_morph_analyzer()
+            # Убедимся, что лемматизатор инициализирован
+            if not hasattr(self, 'lemmatizer'):
+                self.lemmatizer = Lemmatizer()
             
         except Exception as e:
             print(f"Ошибка при асинхронной загрузке данных из Google Sheets: {e}")
 
     def update_from_sheets(self):
-        """Обновление данных из Google Sheets - теперь вызывает асинхронный метод"""
+        """Обновление данных из Google Sheets - теперь вызывает асинхронный метод
+        Метод изменен, чтобы избежать использования asyncio.run() внутри синхронной функции
+        """
         import asyncio
         try:
             # Проверяем, запущен ли уже цикл
@@ -208,8 +209,10 @@ class KeywordDictionary:
             # Если цикл запущен, создаем задачу
             asyncio.create_task(self.async_load_from_sheets())
         except RuntimeError:
-            # Если цикл не запущен, инициализируем синхронно
-            asyncio.run(self.async_load_from_sheets())
+            # Если цикл не запущен, мы не можем запустить асинхронную функцию из синхронной
+            # Вместо этого, пользователь должен вызвать асинхронный метод напрямую
+            raise RuntimeError("Невозможно вызвать update_from_sheets из синхронного контекста без запущенного цикла. "
+                             "Используйте async_load_from_sheets напрямую в асинхронном контексте.")
 
     async def load(self):
         """Асинхронный метод для загрузки данных из Google Sheets"""
@@ -234,16 +237,7 @@ class KeywordDictionary:
         # Пробуем найти точное совпадение
         if keyword_lower in self.keyword_to_category:
             entry = self.keyword_to_category[keyword_lower]
-            # Hotfix: проверяем, не является ли entry строкой вместо KeywordEntry
-            if isinstance(entry, str):
-                # Если entry - строка, создаем из нее KeywordEntry
-                entry = KeywordEntry(
-                    keyword=keyword_lower,
-                    category=entry,
-                    confidence=0.5
-                )
-                # Обновляем словарь
-                self.keyword_to_category[keyword_lower] = entry
+            self._validate_keyword_entry(entry, f" для ключа '{keyword_lower}'")
             self._update_usage_stats(entry)
             return entry.category, entry.confidence
         
@@ -254,16 +248,7 @@ class KeywordDictionary:
                 bigram = f"{words[i]} {words[i + 1]}"
                 if bigram in self.bigram_to_category:
                     entry = self.bigram_to_category[bigram]
-                    # Hotfix: проверяем, не является ли entry строкой вместо KeywordEntry
-                    if isinstance(entry, str):
-                        # Если entry - строка, создаем из нее KeywordEntry
-                        entry = KeywordEntry(
-                            keyword=bigram,
-                            category=entry,
-                            confidence=0.5
-                        )
-                        # Обновляем словарь
-                        self.bigram_to_category[bigram] = entry
+                    self._validate_keyword_entry(entry, f" для биграммы '{bigram}'")
                     self._update_usage_stats(entry)
                     return entry.category, entry.confidence
         
@@ -274,17 +259,7 @@ class KeywordDictionary:
         for word in words:
             if word in self.unigram_to_categories:
                 for entry in self.unigram_to_categories[word]:
-                    # Hotfix: проверяем, не является ли entry строкой вместо KeywordEntry
-                    if isinstance(entry, str):
-                        # Если entry - строка, создаем из нее KeywordEntry
-                        entry = KeywordEntry(
-                            keyword=word,
-                            category=entry,
-                            confidence=0.5
-                        )
-                        # Обновляем список
-                        idx = self.unigram_to_categories[word].index(entry)
-                        self.unigram_to_categories[word][idx] = entry
+                    self._validate_keyword_entry(entry, f" для униграммы '{word}'")
                     if entry.confidence > max_confidence:
                         max_confidence = entry.confidence
                         best_category = entry.category
@@ -306,8 +281,14 @@ class KeywordDictionary:
         
         return None
     
+    def _validate_keyword_entry(self, entry, context: str = ""):
+        """Валидация, что entry является экземпляром KeywordEntry"""
+        if not isinstance(entry, KeywordEntry):
+            raise TypeError(f"Entry{context} должен быть KeywordEntry, но является {type(entry)}")
+    
     def _update_usage_stats(self, entry: KeywordEntry):
         """Обновление статистики использования для элемента"""
+        self._validate_keyword_entry(entry, " для обновления статистики")
         entry.usage_count += 1
         entry.last_used = datetime.now()
         self.usage_stats[entry.keyword] += 1
@@ -329,6 +310,7 @@ class KeywordDictionary:
         # Проверяем точные совпадения
         if text_lower in self.keyword_to_category:
             entry = self.keyword_to_category[text_lower]
+            self._validate_keyword_entry(entry, f" для точного совпадения '{text_lower}'")
             self._update_usage_stats(entry)
             results.append((entry.category, entry.confidence))
         
@@ -337,6 +319,7 @@ class KeywordDictionary:
             bigram = f"{words[i]} {words[i + 1]}"
             if bigram in self.bigram_to_category:
                 entry = self.bigram_to_category[bigram]
+                self._validate_keyword_entry(entry, f" для биграммы '{bigram}'")
                 self._update_usage_stats(entry)
                 results.append((entry.category, entry.confidence))
         
@@ -344,13 +327,14 @@ class KeywordDictionary:
         for word in words:
             if word in self.unigram_to_categories:
                 for entry in self.unigram_to_categories[word]:
+                    self._validate_keyword_entry(entry, f" для униграммы '{word}'")
                     # Избегаем дубликатов
                     if (entry.category, entry.confidence) not in results:
                         self._update_usage_stats(entry)
                         results.append((entry.category, entry.confidence))
         
         # Если не нашли результатов по обычному тексту, пробуем использовать лемматизацию
-        if not results and self.morph_analyzer:
+        if not results:
             lemma_results = self._find_by_lemma(text)
             if lemma_results:
                 category, confidence = lemma_results
@@ -382,13 +366,14 @@ class KeywordDictionary:
         # Нормализуем ключевое слово: приводим к нижнему регистру и убираем лишние пробелы
         keyword_normalized = self.normalize_text(keyword)
         
-        # Лемматизируем ключевое слово, если доступен morph_analyzer
-        keyword_lemmatized = self.lemmatize_text(keyword) if (hasattr(self, 'morph_analyzer') and self.morph_analyzer) else keyword_normalized
+        # Лемматизируем ключевое слово
+        keyword_lemmatized = self.lemmatizer.lemmatize_text(keyword)
         
         # Добавляем нормализованное слово
         if keyword_normalized in self.keyword_to_category:
             # Обновляем существующий элемент
             entry = self.keyword_to_category[keyword_normalized]
+            self._validate_keyword_entry(entry, f" при добавлении нового ключевого слова для ключа '{keyword_normalized}'")
             entry.category = category
             entry.confidence = confidence
         else:
@@ -408,12 +393,14 @@ class KeywordDictionary:
         for word in words:
             if word not in self.unigram_to_categories:
                 self.unigram_to_categories[word] = []
+            self._validate_keyword_entry(entry, f" при добавлении в униграммы при ручном добавлении для слова '{word}'")
             self.unigram_to_categories[word].append(entry)
         
         # Обновляем биграммы
         if len(words) > 1:
             for i in range(len(words) - 1):
                 bigram = f"{words[i]} {words[i + 1]}"
+                self._validate_keyword_entry(entry, f" при добавлении в биграммы при ручном добавлении '{bigram}'")
                 self.bigram_to_category[bigram] = entry
         
         # Если лемматизированное слово отличается от нормализованного, добавляем его тоже
@@ -425,6 +412,7 @@ class KeywordDictionary:
                     category=category,
                     confidence=confidence
                 )
+                self._validate_keyword_entry(lemma_entry, f" при добавлении леммы для ключа '{keyword_lemmatized}'")
                 self.keyword_to_category[keyword_lemmatized] = lemma_entry
                 
                 # Добавляем лемму в категорию
@@ -435,12 +423,15 @@ class KeywordDictionary:
                 for word in lemma_words:
                     if word not in self.unigram_to_categories:
                         self.unigram_to_categories[word] = []
+                    # Добавляем проверку типа перед добавлением в список
+                    self._validate_keyword_entry(lemma_entry, f" при добавлении в униграммы для слова '{word}'")
                     self.unigram_to_categories[word].append(lemma_entry)
                 
                 # Обновляем биграммы для леммы
                 if len(lemma_words) > 1:
                     for i in range(len(lemma_words) - 1):
                         bigram = f"{lemma_words[i]} {lemma_words[i + 1]}"
+                        self._validate_keyword_entry(lemma_entry, f" при добавлении в биграммы '{bigram}'")
                         self.bigram_to_category[bigram] = lemma_entry
         
         # Сохраняем в Google Sheets только если save_to_sheet=True
@@ -451,20 +442,24 @@ class KeywordDictionary:
         self.last_update = datetime.now()
 
     def _async_add_keyword_to_sheet(self, keyword: str, category: str, confidence: float):
-        """Асинхронное добавление ключевого слова в Google Sheets"""
+        """Асинхронное добавление ключевого слова в Google Sheets
+        Метод изменен, чтобы избежать использования asyncio.get_event_loop() без проверки запущенного цикла
+        """
         from sheets.client import add_keyword_to_sheet
         import asyncio
         try:
             # Выполняем асинхронный вызов для сохранения в Google Sheets
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Если цикл уже запущен, создаем задачу
-                asyncio.create_task(add_keyword_to_sheet(keyword, category, confidence))
-            else:
-                # Иначе запускаем напрямую
-                loop.run_until_complete(add_keyword_to_sheet(keyword, category, confidence))
-        except Exception as e:
-            logger.error(f"❌ Ошибка при сохранении ключевого слова в Google Sheets: {e}")
+            loop = asyncio.get_running_loop()
+            # Если цикл запущен, создаем задачу
+            asyncio.create_task(add_keyword_to_sheet(keyword, category, confidence))
+        except RuntimeError:
+            # Если цикл не запущен, мы не можем выполнить асинхронный вызов из синхронного контекста
+            # Вместо этого, пользователь должен вызвать асинхронный метод напрямую
+            logger.warning(f"⚠️ Невозможно выполнить асинхронный вызов из синхронного контекста для добавления '{keyword}'. "
+                          "Рекомендуется вызывать асинхронные методы из асинхронного контекста.")
+            # В текущей реализации просто логируем предупреждение,
+            # так как синхронная версия функции не реализована
+            logger.warning(f"⚠️ Ключевое слово '{keyword}' не было сохранено в Google Sheets из-за отсутствия асинхронного контекста.")
     
     def normalize_text(self, text: str) -> str:
         """
@@ -476,31 +471,20 @@ class KeywordDictionary:
         """
         Лемматизация отдельного слова
         """
-        if hasattr(self, 'morph_analyzer') and self.morph_analyzer and len(word) >= 2:
-            try:
-                parsed_word = self.morph_analyzer.parse(word)[0]
-                return parsed_word.normal_form
-            except Exception:
-                # Если лемматизация не удалась, возвращаем исходное слово
-                return word
-        return word
+        return self.lemmatizer.lemmatize_word(word)
     
     def lemmatize_text(self, text: str) -> str:
         """
         Лемматизация всего текста
         """
-        if not hasattr(self, 'morph_analyzer') or not self.morph_analyzer:
-            return text.lower()
-            
-        words = re.findall(r'\b[а-яёa-z]+\b', text.lower())
-        lemmatized_words = [self.lemmatize_word(word) for word in words]
-        return ' '.join(lemmatized_words)
+        return self.lemmatizer.lemmatize_text(text)
     
     def _find_by_lemma(self, text: str) -> Optional[Tuple[str, float]]:
         """
         Поиск категории по лемматизированному тексту
         """
-        if not hasattr(self, 'morph_analyzer') or not self.morph_analyzer:
+        # Проверяем, доступен ли лемматизатор
+        if not hasattr(self, 'lemmatizer') or not self.lemmatizer.morph_analyzer:
             return None
             
         # Лемматизируем входной текст
@@ -509,6 +493,7 @@ class KeywordDictionary:
         # Пробуем найти точное совпадение с лемматизированным текстом
         if lemmatized_text in self.keyword_to_category:
             entry = self.keyword_to_category[lemmatized_text]
+            self._validate_keyword_entry(entry, f" для лемматизированного текста '{lemmatized_text}'")
             self._update_usage_stats(entry)
             return entry.category, entry.confidence
         
@@ -518,6 +503,7 @@ class KeywordDictionary:
             bigram = f"{lemmatized_words[i]} {lemmatized_words[i + 1]}"
             if bigram in self.bigram_to_category:
                 entry = self.bigram_to_category[bigram]
+                self._validate_keyword_entry(entry, f" для биграммы '{bigram}'")
                 self._update_usage_stats(entry)
                 return entry.category, entry.confidence
         
@@ -528,6 +514,7 @@ class KeywordDictionary:
         for word in lemmatized_words:
             if word in self.unigram_to_categories:
                 for entry in self.unigram_to_categories[word]:
+                    self._validate_keyword_entry(entry, f" для униграммы '{word}'")
                     if entry.confidence > max_confidence:
                         max_confidence = entry.confidence
                         best_category = entry.category

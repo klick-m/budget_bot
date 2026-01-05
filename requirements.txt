@@ -15,3 +15,6 @@ aiosqlite>=0.19,<0.20
 # Testing dependencies
 pytest>=7.0,<8.0
 pytest-asyncio>=0.21,<0.23
+
+# Visualization dependencies
+matplotlib>=3.8,<4.0

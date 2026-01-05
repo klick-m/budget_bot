@@ -284,6 +284,8 @@ async def load_categories_from_sheet() -> bool:
         try:
             # Импортируем classifier внутри функции, чтобы избежать циклического импорта
             from utils.category_classifier import classifier
+            # Асинхронная инициализация classifier и его KeywordDictionary
+            await classifier.load()
             # Обновляем словарь ключевых слов в KeywordDictionary
             for category, keywords in CATEGORY_STORAGE.keywords.items():
                 try:
