@@ -9,7 +9,7 @@ import inspect
 from unittest.mock import MagicMock, AsyncMock, Mock
 
 # Импортируем модели и репозиторий для middleware
-from services.repository import TransactionRepository
+from services.repository import UserRepository
 
 
 async def safe_answer(callback: types.CallbackQuery):
@@ -119,7 +119,7 @@ class AuthMiddleware:
     Извлекает пользователя из БД по telegram_id, если пользователь отсутствует - прерывает обработку.
     """
     
-    def __init__(self, repo: TransactionRepository):
+    def __init__(self, repo: UserRepository):
         self.repo = repo
 
     async def __call__(self, handler, event, data: Dict[str, Any]) -> Optional[Any]:
@@ -134,8 +134,10 @@ class AuthMiddleware:
 
         # Проверяем, существует ли пользователь в БД
         user_data = await self.repo.get_user_by_telegram_id(telegram_id)
-        # Если пользователя нет в БД, всё равно продолжаем обработку, но передаем None в current_user
-        # Хендлер сам решит, что делать с отсутствующим пользователем
+        
+        if user_data is None:
+            # Пользователь не найден в БД - не продолжаем обработку
+            return None
 
         # Добавляем информацию о пользователе в данные для доступа в хендлере
         data['current_user'] = user_data

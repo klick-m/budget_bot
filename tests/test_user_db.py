@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest_asyncio
 
 from services.auth_service import AuthService
-from services.repository import TransactionRepository
+from services.repository import UserRepository
 from models.user import User
 
 
@@ -27,11 +27,11 @@ async def temp_db():
 @pytest_asyncio.fixture
 async def auth_service(temp_db):
     """Создает экземпляр AuthService для тестов."""
-    repo = TransactionRepository(db_path=temp_db)
-    await repo.init_db()
-    service = AuthService(repo=repo)
+    user_repo = UserRepository(db_path=temp_db)
+    await user_repo.init_db()
+    service = AuthService(user_repo=user_repo)
     yield service
-    await repo.close()
+    await user_repo.close()
 
 
 class TestUserService:

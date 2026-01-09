@@ -3,7 +3,149 @@ from typing import List, Optional
 import sqlite3
 from contextlib import asynccontextmanager
 
+from models.user import User
 from config import logger
+
+
+class UserRepository:
+    def __init__(self, db_path: str = "transactions.db"):
+        self.db_path = db_path
+
+    async def init_db(self):
+        """Initialize the database and create the users table if it doesn't exist."""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Создаем таблицу пользователей, если она не существует
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
+                    username TEXT,
+                    role TEXT DEFAULT 'user',
+                    monthly_limit REAL DEFAULT 0
+                )
+                """
+            )
+            await db.commit()
+
+    @asynccontextmanager
+    async def _get_connection(self):
+        """Context manager to get database connection."""
+        async with aiosqlite.connect(self.db_path) as db:
+            yield db
+
+    async def get_user_by_id(self, user_id: int) -> Optional[User]:
+        """Get user by database ID."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                SELECT id, telegram_id, username, role, monthly_limit
+                FROM users
+                WHERE id = ?
+                """,
+                (user_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                columns = [column[0] for column in cursor.description]
+                user_data = dict(zip(columns, row))
+                return User(**user_data)
+            return None
+
+    async def create_user(self, user_data: dict) -> User:
+        """Create a new user."""
+        telegram_id = user_data['telegram_id']
+        username = user_data.get('username')
+        role = user_data.get('role', 'user')
+        monthly_limit = user_data.get('monthly_limit', 0.0)
+
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO users (telegram_id, username, role, monthly_limit)
+                VALUES (?, ?, ?, ?)
+                """,
+                (telegram_id, username, role, monthly_limit)
+            )
+            user_id = cursor.lastrowid
+            await db.commit()
+        
+        return User(
+            id=user_id,
+            telegram_id=telegram_id,
+            username=username,
+            role=role,
+            monthly_limit=monthly_limit
+        )
+
+    async def update_user_fields(self, user_id: int, fields: dict) -> bool:
+        """Update user fields by user ID."""
+        if not fields:
+            return False
+
+        set_clause = ", ".join([f"{field} = ?" for field in fields.keys()])
+        values = list(fields.values()) + [user_id]
+
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                f"""
+                UPDATE users
+                SET {set_clause}
+                WHERE id = ?
+                """,
+                values
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def delete_user(self, user_id: int) -> bool:
+        """Delete user by database ID."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                DELETE FROM users WHERE id = ?
+                """,
+                (user_id,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_all_users(self) -> List[User]:
+        """Get all users."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                SELECT id, telegram_id, username, role, monthly_limit
+                FROM users
+                ORDER BY id
+                """
+            )
+            rows = await cursor.fetchall()
+            columns = [column[0] for column in cursor.description]
+            users_data = [dict(zip(columns, row)) for row in rows]
+            return [User(**user_data) for user_data in users_data]
+
+    async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[User]:
+        """Get user by telegram_id. Returns user data if exists, None otherwise."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                SELECT id, telegram_id, username, role, monthly_limit
+                FROM users
+                WHERE telegram_id = ?
+                """,
+                (telegram_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                columns = [column[0] for column in cursor.description]
+                user_data = dict(zip(columns, row))
+                return User(**user_data)
+            return None
+
+    async def close(self):
+        """Close the database connection if it was opened."""
+        pass  # В текущей реализации aiosqlite использует контекстные менеджеры, поэтому отдельное закрытие не требуется
 
 
 class TransactionRepository:
@@ -135,20 +277,3 @@ class TransactionRepository:
     async def close(self):
         """Close the database connection if it was opened."""
         pass  # В текущей реализации aiosqlite использует контекстные менеджеры, поэтому отдельное закрытие не требуется
-
-    async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[dict]:
-        """Get user by telegram_id. Returns user data if exists, None otherwise."""
-        async with self._get_connection() as db:
-            cursor = await db.execute(
-                """
-                SELECT id, telegram_id, username, role, monthly_limit
-                FROM users
-                WHERE telegram_id = ?
-                """,
-                (telegram_id,)
-            )
-            row = await cursor.fetchone()
-            if row:
-                columns = [column[0] for column in cursor.description]
-                return dict(zip(columns, row))
-            return None

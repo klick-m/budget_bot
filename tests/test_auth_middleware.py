@@ -2,14 +2,14 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock
 from datetime import datetime
 from aiogram.types import Message, CallbackQuery, User, Chat
-from services.repository import TransactionRepository
+from services.repository import UserRepository
 from utils.service_wrappers import AuthMiddleware
 
 
 @pytest.fixture
 def mock_repo():
     """Мок репозитория для тестов"""
-    repo = AsyncMock(spec=TransactionRepository)
+    repo = AsyncMock(spec=UserRepository)
     # Добавляем метод, который будет использоваться в middleware
     repo.get_user_by_telegram_id = AsyncMock()
     return repo
