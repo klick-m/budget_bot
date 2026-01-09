@@ -88,11 +88,7 @@ class UserRepository:
 
         async with self._get_connection() as db:
             cursor = await db.execute(
-                f"""
-                UPDATE users
-                SET {set_clause}
-                WHERE id = ?
-                """,
+                "UPDATE users SET {} WHERE id = ?".format(set_clause),
                 values
             )
             await db.commit()
@@ -143,6 +139,27 @@ class UserRepository:
                 return User(**user_data)
             return None
 
+    async def update_user_profile(self, user_id: int, username: Optional[str] = None,
+                                role: Optional[str] = None, monthly_limit: Optional[float] = None) -> bool:
+        """Update user profile (multiple fields at once)"""
+        user = await self.get_user_by_id(user_id)
+        if not user:
+            return False
+
+        # Prepare dictionary of fields to update
+        fields = {}
+        if username is not None:
+            fields['username'] = username
+        if role is not None:
+            fields['role'] = role
+        if monthly_limit is not None:
+            fields['monthly_limit'] = monthly_limit
+
+        if not fields:
+            return False
+
+        return await self.update_user_fields(user_id, fields)
+
     async def close(self):
         """Close the database connection if it was opened."""
         pass  # В текущей реализации aiosqlite использует контекстные менеджеры, поэтому отдельное закрытие не требуется
@@ -158,19 +175,6 @@ class TransactionRepository:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute("PRAGMA synchronous=NORMAL;")
-            
-            # Создаем таблицу пользователей, если она не существует
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    telegram_id INTEGER UNIQUE NOT NULL,
-                    username TEXT,
-                    role TEXT DEFAULT 'user',
-                    monthly_limit REAL DEFAULT 0
-                )
-                """
-            )
             
             # Создаем таблицу транзакций, если она не существует
             await db.execute(

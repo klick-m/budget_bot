@@ -108,17 +108,5 @@ class AuthService:
         if not user:
             return False
 
-        # Подготовим словарь полей для обновления
-        fields = {}
-        if username is not None:
-            fields['username'] = username
-        if role is not None:
-            fields['role'] = role
-        if monthly_limit is not None:
-            fields['monthly_limit'] = monthly_limit
-
-        if not fields:
-            return False
-
         # Обновляем пользователя через репозиторий
-        return await self.user_repo.update_user_fields(user.id, fields)
+        return await self.user_repo.update_user_profile(user.id, username, role, monthly_limit)

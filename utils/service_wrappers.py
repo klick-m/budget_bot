@@ -132,11 +132,18 @@ class AuthMiddleware:
         # Получаем telegram_id пользователя
         telegram_id = user.id
 
+        # Проверяем, является ли команда /start
+        is_start_command = False
+        if hasattr(event, 'text') and event.text == '/start':
+            is_start_command = True
+        elif hasattr(event, 'data') and event.data == 'start':  # для callback-запросов, если применимо
+            is_start_command = True
+
         # Проверяем, существует ли пользователь в БД
         user_data = await self.repo.get_user_by_telegram_id(telegram_id)
         
-        if user_data is None:
-            # Пользователь не найден в БД - не продолжаем обработку
+        if user_data is None and not is_start_command:
+            # Пользователь не найден в БД и это не команда /start - не продолжаем обработку
             return None
 
         # Добавляем информацию о пользователе в данные для доступа в хендлере

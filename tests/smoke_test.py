@@ -86,7 +86,7 @@ async def main():
         bot = Bot(token=BOT_TOKEN or "123:TEST") # Use real token or mock
         
         # Создаем AuthService и внедряем его вместе с другими сервисами
-        auth_service = AuthService(repo=repo)
+        auth_service = AuthService(user_repo=repo)
         
         # Создаем AnalyticsService и внедряем его
         try:

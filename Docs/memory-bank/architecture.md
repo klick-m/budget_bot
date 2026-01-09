@@ -12,7 +12,7 @@
 - **Service Layer**: Бизнес-логика (расчеты, валидация) живет в `TransactionService`, `AuthService` и `AnalyticsService`.
 - **Dependency Injection**: Все сервисы внедряются в диспетчер через `dp.workflow_data` и передаются в хендлеры через аннотации типов.
 - **Local-First**: Транзакция считается успешной сразу после записи в SQLite. Синхронизация с облаком выполняется фоновым процессом `SyncWorker`.
-- **Auth Middleware**: Проверка прав пользователя и инъекция объекта `current_user` происходит на уровне Middleware до попадания в хендлеры.
+- **Auth Middleware**: Проверка прав пользователя и инъекция объекта `current_user` происходит на уровне Middleware до попадания в хендлеры. AuthMiddleware интегрирована с UserRepository для проверки наличия пользователя в системе и его роли.
 
 ## Data Flow
 1. **Input**: Telegram Message -> Middleware (Auth) -> Handler.
