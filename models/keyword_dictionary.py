@@ -10,7 +10,6 @@ except ImportError:
     MorphAnalyzer = None
 
 from config import logger
-from sheets.client import GoogleSheetsClient
 from utils.lemmatizer import Lemmatizer
 
 
@@ -42,7 +41,6 @@ class KeywordDictionary:
         """
         self.spreadsheet_id = spreadsheet_id
         self.sheet_name = sheet_name
-        self.sheets_client = GoogleSheetsClient()
         
         # Основной словарь: категория -> список ключевых слов
         self.category_keywords: Dict[str, List[KeywordEntry]] = defaultdict(list)
@@ -63,6 +61,7 @@ class KeywordDictionary:
         self.last_update: Optional[datetime] = None
         
         # Инициализация Lemmatizer для лемматизации
+        # Используем глобальный экземпляр MorphAnalyzer для избежания дублирования инициализаций
         self.lemmatizer = Lemmatizer()
     
     def _initialize_morph_analyzer(self):
@@ -70,67 +69,6 @@ class KeywordDictionary:
         # Этот метод больше не используется, так как лемматизация вынесена в отдельный класс
         pass
     
-    def load_from_sheets(self):
-        """Загрузка данных из Google Sheets"""
-        try:
-            # Получаем данные из Google Sheets (один batch-запрос)
-            data = self.sheets_client.get_sheet_data(self.spreadsheet_id, self.sheet_name)
-            
-            # Очищаем текущие данные
-            self.category_keywords.clear()
-            self.keyword_to_category.clear()
-            self.bigram_to_category.clear()
-            self.unigram_to_categories.clear()
-            
-            # Обрабатываем полученные данные (все в памяти, без дополнительных API-вызовов)
-            for row in data:
-                if len(row) >= 3:  # Убедимся, что есть все необходимые столбцы
-                    keyword = row[0].strip().lower()
-                    category = row[1].strip()
-                    try:
-                        confidence = float(row[2])
-                    except ValueError:
-                        confidence = 0.5  # Значение по умолчанию при ошибке
-                    
-                    # Создаем новый или обновляем существующий элемент
-                    if keyword in self.keyword_to_category:
-                       # Обновляем существующий элемент
-                       entry = self.keyword_to_category[keyword]
-                       self._validate_keyword_entry(entry, f" при обновлении из таблицы для ключа '{keyword}'")
-                       entry.category = category
-                       entry.confidence = confidence
-                    else:
-                       # Создаем новый элемент
-                       entry = KeywordEntry(
-                           keyword=keyword,
-                           category=category,
-                           confidence=confidence
-                       )
-                       self.keyword_to_category[keyword] = entry
-                    
-                    # Добавляем в категорию
-                    self.category_keywords[category].append(entry)
-                    
-                    # Добавляем в индекс униграмм
-                    words = keyword.split()
-                    for word in words:
-                        if word not in self.unigram_to_categories:
-                            self.unigram_to_categories[word] = []
-                        self._validate_keyword_entry(entry, f" при добавлении в униграммы из таблицы для слова '{word}'")
-                        self.unigram_to_categories[word].append(entry)
-                    
-                    # Добавляем биграммы, если слов в фразе больше одного
-                    if len(words) > 1:
-                        for i in range(len(words) - 1):
-                            bigram = f"{words[i]} {words[i + 1]}"
-                            self._validate_keyword_entry(entry, f" при добавлении в биграммы из таблицы '{bigram}'")
-                            self.bigram_to_category[bigram] = entry
-            
-            self.last_update = datetime.now()
-            
-        except Exception as e:
-            print(f"Ошибка при загрузке данных из Google Sheets: {e}")
-
     async def async_load_from_sheets(self):
         """Асинхронная загрузка данных из Google Sheets с использованием кэширования"""
         try:
@@ -192,7 +130,7 @@ class KeywordDictionary:
             self.last_update = datetime.now()
             
             # Убедимся, что лемматизатор инициализирован
-            if not hasattr(self, 'lemmatizer'):
+            if not hasattr(self, 'lemmatizer') or self.lemmatizer is None:
                 self.lemmatizer = Lemmatizer()
             
         except Exception as e:
@@ -208,11 +146,12 @@ class KeywordDictionary:
             loop = asyncio.get_running_loop()
             # Если цикл запущен, создаем задачу
             asyncio.create_task(self.async_load_from_sheets())
+            logger.info(f"Задача обновления словаря ключевых слов запущена асинхронно для листа {self.sheet_name}")
         except RuntimeError:
             # Если цикл не запущен, мы не можем запустить асинхронную функцию из синхронной
             # Вместо этого, пользователь должен вызвать асинхронный метод напрямую
-            raise RuntimeError("Невозможно вызвать update_from_sheets из синхронного контекста без запущенного цикла. "
-                             "Используйте async_load_from_sheets напрямую в асинхронном контексте.")
+            logger.warning("Невозможно вызвать update_from_sheets из синхронного контекста без запущенного цикла. "
+                          "Используйте async_load_from_sheets напрямую в асинхронном контексте.")
 
     async def load(self):
         """Асинхронный метод для загрузки данных из Google Sheets"""

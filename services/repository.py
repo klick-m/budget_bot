@@ -17,7 +17,20 @@ class TransactionRepository:
             await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute("PRAGMA synchronous=NORMAL;")
             
-            # Создаем таблицу, если она не существует
+            # Создаем таблицу пользователей, если она не существует
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
+                    username TEXT,
+                    role TEXT DEFAULT 'user',
+                    monthly_limit REAL DEFAULT 0
+                )
+                """
+            )
+            
+            # Создаем таблицу транзакций, если она не существует
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS transactions (
@@ -122,3 +135,20 @@ class TransactionRepository:
     async def close(self):
         """Close the database connection if it was opened."""
         pass  # В текущей реализации aiosqlite использует контекстные менеджеры, поэтому отдельное закрытие не требуется
+
+    async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[dict]:
+        """Get user by telegram_id. Returns user data if exists, None otherwise."""
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                SELECT id, telegram_id, username, role, monthly_limit
+                FROM users
+                WHERE telegram_id = ?
+                """,
+                (telegram_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                columns = [column[0] for column in cursor.description]
+                return dict(zip(columns, row))
+            return None

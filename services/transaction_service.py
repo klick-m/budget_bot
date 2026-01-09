@@ -9,7 +9,7 @@ from models.transaction import TransactionData, CheckData
 from sheets.client import write_transaction, add_keywords_to_sheet, load_categories_from_sheet
 from utils.exceptions import SheetWriteError, CheckApiTimeout, CheckApiRecognitionError, TransactionSaveError
 from utils.receipt_logic import parse_check_from_api, extract_learnable_keywords
-from utils.category_classifier import classifier
+from utils.category_classifier import TransactionCategoryClassifier
 
 from config import logger
 
@@ -20,8 +20,14 @@ class TransactionService:
     Объединяет логику валидации, DTO, и записи транзакций.
     """
     
+    async def initialize(self):
+        """Асинхронная инициализация сервиса"""
+        await self.classifier.load()
+    
     def __init__(self, repository=None):
-        self.classifier = classifier
+        # Используем глобальный экземпляр классификатора для избежания дублирования инициализаций
+        from utils.category_classifier import get_global_classifier
+        self.classifier = get_global_classifier()
         self.repository = repository
 
     async def create_transaction_from_check(self, image_bytes: bytes) -> Optional[CheckData]:
@@ -33,8 +39,9 @@ class TransactionService:
         except (CheckApiTimeout, CheckApiRecognitionError) as e:
             raise e
 
-        if parsed_data.amount <= 0:
-            raise ValueError("Чек распознан, но сумма равна нулю или отрицательна")
+        # Для возвратов разрешаем отрицательные суммы
+        if parsed_data.amount == 0:
+            raise ValueError("Чек распознан, но сумма равна нулю")
 
         return parsed_data
 

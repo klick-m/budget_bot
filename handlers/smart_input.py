@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram import F
 
 # Импорты из нашей структуры
-from config import ALLOWED_USER_IDS, logger
+from config import logger
 from models.transaction import TransactionData
 from services.input_parser import InputParser
 from services.transaction_service import TransactionService
@@ -25,21 +25,19 @@ from aiogram.filters import Command, StateFilter
 # --- A. ФИЛЬТР И FSM ---
 # ----------------------------------------------------------------------
 
-class AllowedUsersFilter(BaseFilter):
-    """Проверяет, является ли отправитель сообщения разрешенным пользователем."""
-    async def __call__(self, message: types.Message) -> bool:
-        if not ALLOWED_USER_IDS:
-             return True # Если список разрешенных ID пуст, разрешаем всем
-             
-        return message.from_user.id in ALLOWED_USER_IDS
 
 
 # --- F. УМНЫЙ ВВОД ЧЕРЕЗ FSM ---
 # ----------------------------------------------------------------------
 
-async def process_smart_input(message: types.Message, state: FSMContext, transaction_service: TransactionService):
+async def process_smart_input(message: types.Message, state: FSMContext, data: dict):
     """Обрабатывает умный ввод транзакции в формате 'кофе 300'."""
     await state.clear()
+    
+    # Извлекаем сервис из data, который был внедрен через DI
+    transaction_service = data.get("transaction_service")
+    if not transaction_service:
+        raise ValueError("TransactionService не найден в контексте. Проверьте внедрение зависимостей.")
     
     user_input = message.text.strip()
     
@@ -68,13 +66,19 @@ async def process_smart_input(message: types.Message, state: FSMContext, transac
     if "доход" in text_lower or "зарплата" in text_lower or "подарок" in text_lower or "возврат" in text_lower:
         transaction_type = "Доход"
     
+    # Получаем информацию о пользователе из middleware
+    current_user = data.get('current_user')
+    if not current_user:
+        await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
+        return
+
     transaction_data = TransactionData(
         type=transaction_type,
         category="",  # Категория будет определена позже
         amount=parsed_data['amount'],
         comment=parsed_data['comment'],
         username=message.from_user.username or message.from_user.full_name,
-        user_id=message.from_user.id,
+        user_id=current_user['telegram_id'],  # Используем ID из middleware
         retailer_name="",
         items_list="",
         payment_info="",
@@ -118,15 +122,20 @@ async def process_smart_input(message: types.Message, state: FSMContext, transac
     await state.set_state(TransactionStates.waiting_for_confirmation)
 
 
-async def confirm_smart_transaction(callback: types.CallbackQuery, state: FSMContext, transaction_service: TransactionService):
+async def confirm_smart_transaction(callback: types.CallbackQuery, state: FSMContext, data: dict):
     """Подтверждает и записывает транзакцию из умного ввода."""
     
     await safe_answer(callback)
     
     try:
+        # Извлекаем сервис из data, который был внедрен через DI
+        transaction_service = data.get("transaction_service")
+        if not transaction_service:
+            raise ValueError("TransactionService не найден в контексте. Проверьте внедрение зависимостей.")
+        
         # Получаем данные транзакции из FSM
-        data = await state.get_data()
-        transaction_data: TransactionData = data.get('transaction_data')
+        fsm_data = await state.get_data()
+        transaction_data: TransactionData = fsm_data.get('transaction_data')
         
         if not transaction_data:
             await edit_or_send(
@@ -186,7 +195,7 @@ async def confirm_smart_transaction(callback: types.CallbackQuery, state: FSMCon
             logger.error(f"Не удалось отправить сообщение об ошибке: {e}")
 
 
-async def cancel_smart_transaction(callback: types.CallbackQuery, state: FSMContext):
+async def cancel_smart_transaction(callback: types.CallbackQuery, state: FSMContext, data: dict = None):
     """Отменяет ввод транзакции из умного ввода."""
     
     await safe_answer(callback)
@@ -212,14 +221,13 @@ def register_smart_input_handlers(dp: Router):
     
     # FSM для умного ввода: только если текст не команда, не кнопка и нет активного состояния
     dp.message.register(
-        process_smart_input, 
-        F.text, 
+        process_smart_input,
+        F.text,
         ~F.text.startswith("/"),
         ~F.text.in_(main_buttons),
-        AllowedUsersFilter(),
         StateFilter(None)
     )
     
     # Callback-хендлеры для подтверждения
-    dp.callback_query.register(confirm_smart_transaction, F.data == "confirm_smart_transaction", TransactionStates.waiting_for_confirmation, AllowedUsersFilter())
-    dp.callback_query.register(cancel_smart_transaction, F.data == "cancel_smart_transaction", TransactionStates.waiting_for_confirmation, AllowedUsersFilter())
+    dp.callback_query.register(confirm_smart_transaction, F.data == "confirm_smart_transaction", TransactionStates.waiting_for_confirmation)
+    dp.callback_query.register(cancel_smart_transaction, F.data == "cancel_smart_transaction", TransactionStates.waiting_for_confirmation)

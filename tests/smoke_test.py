@@ -78,17 +78,44 @@ async def main():
         from handlers import register_all_handlers
         from aiogram import Dispatcher, Bot
         from aiogram.fsm.storage.memory import MemoryStorage
+        from services.auth_service import AuthService
         
         # Create test instance
         storage = MemoryStorage()
         dp = Dispatcher(storage=storage)
         bot = Bot(token=BOT_TOKEN or "123:TEST") # Use real token or mock
         
-        # Inject service
-        dp.workflow_data.update({"transaction_service": service})
+        # Создаем AuthService и внедряем его вместе с другими сервисами
+        auth_service = AuthService(repo=repo)
+        dp.workflow_data.update({
+            "transaction_service": service,
+            "auth_service": auth_service
+        })
         
         register_all_handlers(dp)
         print(f"✅ Handlers registered: {len(dp.message.handlers)} message handlers, {len(dp.callback_query.handlers)} callback handlers")
+        
+        # Проверяем, что все роутеры зарегистрированы
+        print(f"🔍 [7/8] Checking all routers registration...")
+        # Проверим, что хендлеры из всех модулей зарегистрированы
+        from handlers.common import register_common_handlers
+        from handlers.receipts import register_receipt_handlers
+        from handlers.manual import register_manual_handlers, register_draft_handlers
+        from handlers.smart_input import register_smart_input_handlers
+        from handlers.admin import register_admin_handlers
+        
+        # Создадим отдельный диспетчер для проверки
+        test_dp = Dispatcher(storage=MemoryStorage())
+        
+        # Регистрируем все хендлеры в тестовом диспетчере
+        register_common_handlers(test_dp)
+        register_receipt_handlers(test_dp)
+        register_manual_handlers(test_dp)
+        register_draft_handlers(test_dp)
+        register_smart_input_handlers(test_dp)
+        register_admin_handlers(test_dp)
+        
+        print(f"✅ All router handlers registered successfully")
         
         # 8. Проверка парсеров
         print("🔍 [8/8] Checking Parsers and Input Processing...")
@@ -104,10 +131,29 @@ async def main():
         else:
             print("⚠️ Input parser returned None (may be normal for this input)")
         
-
+        # Дополнительная проверка регистрации хендлеров умного ввода
+        print("🔍 [9/9] Checking Smart Input Handler Registration...")
+        from handlers.smart_input import process_smart_input, confirm_smart_transaction, cancel_smart_transaction
+        
+        # Проверим, что хендлеры зарегистрировались правильно (не пустые функции)
+        if process_smart_input.__name__ == "process_smart_input":
+            print(f"✅ process_smart_input handler found: {process_smart_input.__name__}")
+        else:
+            raise Exception("process_smart_input handler not found or incorrectly defined")
+        
+        if confirm_smart_transaction.__name__ == "confirm_smart_transaction":
+            print(f"✅ confirm_smart_transaction handler found: {confirm_smart_transaction.__name__}")
+        else:
+            raise Exception("confirm_smart_transaction handler not found or incorrectly defined")
+            
+        if cancel_smart_transaction.__name__ == "cancel_smart_transaction":
+            print(f"✅ cancel_smart_transaction handler found: {cancel_smart_transaction.__name__}")
+        else:
+            raise Exception("cancel_smart_transaction handler not found or incorrectly defined")
         
         print("========================================")
         print("✅ DEEP SMOKE TEST PASSED. System is stable.")
+        
         print("========================================")
         sys.exit(0)
         

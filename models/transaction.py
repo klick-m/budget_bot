@@ -15,11 +15,11 @@ class CheckItem(BaseModel):
 
 class CheckData(BaseModel):
     """Модель данных, извлекаемых из API чека."""
-    # Используем Literal для указания, что значение может быть "Расход" или "Доход"
-    type: Literal["Расход", "Доход"] = Field('Расход')
-    
+    # Используем Literal для указания, что значение может быть "Расход", "Доход" или "Возврат"
+    type: Literal["Расход", "Доход", "Возврат"] = Field('Расход')
+
     category: str
-    amount: float = Field(..., gt=0, le=100000)  # Ограничение максимальной суммы
+    amount: float = Field(le=10000)  # Ограничение максимальной суммы (для возвратов разрешены отрицательные значения)
     comment: str
     retailer_name: str = ''
     items_list: str = '' # Строковое представление для истории
@@ -48,7 +48,7 @@ class TransactionData(BaseModel):
     """Полная модель данных для записи в Google Sheets."""
     type: str
     category: str
-    amount: float
+    amount: float = Field(ge=-100000, le=100000)  # Разрешаем отрицательные значения для возвратов
     comment: str = ""
     username: str
     user_id: Optional[int] = None # Added user_id

@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram import F
 
 # Импорты из нашей структуры
-from config import ALLOWED_USER_IDS, CATEGORY_STORAGE, logger, SHEET_WRITE_TIMEOUT
+from config import CATEGORY_STORAGE, logger, SHEET_WRITE_TIMEOUT
 from models.transaction import TransactionData
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -31,13 +31,6 @@ from aiogram.filters import Command, or_f
 # --- A. ФИЛЬТР И FSM ---
 # ----------------------------------------------------------------------
 
-class AllowedUsersFilter(BaseFilter):
-    """Проверяет, является ли отправитель сообщения разрешенным пользователем."""
-    async def __call__(self, message: types.Message) -> bool:
-        if not ALLOWED_USER_IDS:
-             return True # Если список разрешенных ID пуст, разрешаем всем
-             
-        return message.from_user.id in ALLOWED_USER_IDS
 
 
 @dataclass
@@ -198,7 +191,7 @@ async def process_amount_input(message: types.Message, state: FSMContext):
     await state.set_state(TransactionStates.entering_comment)
 
 
-async def process_comment_input(message: types.Message, state: FSMContext):
+async def process_comment_input(message: types.Message, state: FSMContext, data: dict):
     """Обрабатывает ввод комментария."""
     user_input_raw = message.text.strip()
     user_input = user_input_raw.lower()
@@ -218,13 +211,19 @@ async def process_comment_input(message: types.Message, state: FSMContext):
     # Получаем все данные для подтверждения
     data = await state.get_data()
     
+    # Получаем информацию о пользователе из middleware
+    current_user = data.get('current_user')
+    if not current_user:
+        await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
+        return
+
     transaction_data = TransactionData(
         type=data['transaction_type'],
         category=data['category'],
         amount=data['amount'],
         comment=comment,
         username=message.from_user.username or message.from_user.full_name,
-        user_id=message.from_user.id,
+        user_id=current_user['telegram_id'],  # Используем ID из middleware
         retailer_name="",
         items_list="",
         payment_info="",
@@ -348,28 +347,28 @@ async def cancel_manual_transaction(callback: types.CallbackQuery, state: FSMCon
 def register_manual_handlers(dp: Router):
     """Регистрирует хендлеры для ручного ввода транзакций"""
     # Команда для начала ручного ввода
-    dp.message.register(start_manual_transaction, or_f(Command("new_transaction"), F.text == "💸 Добавить транзакцию"), AllowedUsersFilter())
+    dp.message.register(start_manual_transaction, or_f(Command("new_transaction"), F.text == "💸 Добавить транзакцию"))
     
     # FSM для ручного ввода
-    dp.message.register(process_type_selection, TransactionStates.choosing_type, AllowedUsersFilter())
-    dp.message.register(process_category_selection, TransactionStates.choosing_category, AllowedUsersFilter())
-    dp.message.register(process_amount_input, TransactionStates.entering_amount, AllowedUsersFilter())
-    dp.message.register(process_comment_input, TransactionStates.entering_comment, AllowedUsersFilter())
+    dp.message.register(process_type_selection, TransactionStates.choosing_type)
+    dp.message.register(process_category_selection, TransactionStates.choosing_category)
+    dp.message.register(process_amount_input, TransactionStates.entering_amount)
+    dp.message.register(process_comment_input, TransactionStates.entering_comment)
     
     # Callback-хендлеры для подтверждения
-    dp.callback_query.register(confirm_manual_transaction, F.data == "confirm_manual_transaction", TransactionStates.waiting_for_confirmation, AllowedUsersFilter())
-    dp.callback_query.register(cancel_manual_transaction, F.data == "cancel_manual_transaction", TransactionStates.waiting_for_confirmation, AllowedUsersFilter())
+    dp.callback_query.register(confirm_manual_transaction, F.data == "confirm_manual_transaction", TransactionStates.waiting_for_confirmation)
+    dp.callback_query.register(cancel_manual_transaction, F.data == "cancel_manual_transaction", TransactionStates.waiting_for_confirmation)
 
 
 def register_draft_handlers(dp: Router):
     """Регистрирует хендлеры для работы с черновиками транзакций"""
     # FSM для работы с черновиками
-    dp.callback_query.register(process_edit_type, F.data == "edit_type", TransactionStates.editing_draft, AllowedUsersFilter())
-    dp.callback_query.register(process_edit_category_draft, F.data == "edit_category_draft", TransactionStates.editing_draft, AllowedUsersFilter())
-    dp.callback_query.register(process_edit_amount, F.data == "edit_amount", TransactionStates.editing_draft, AllowedUsersFilter())
-    dp.callback_query.register(process_edit_comment, F.data == "edit_comment", TransactionStates.editing_draft, AllowedUsersFilter())
-    dp.callback_query.register(confirm_draft, F.data == "confirm_draft", TransactionStates.editing_draft, AllowedUsersFilter())
-    dp.callback_query.register(cancel_draft, F.data == "cancel_draft", TransactionStates.editing_draft, AllowedUsersFilter())
+    dp.callback_query.register(process_edit_type, F.data == "edit_type", TransactionStates.editing_draft)
+    dp.callback_query.register(process_edit_category_draft, F.data == "edit_category_draft", TransactionStates.editing_draft)
+    dp.callback_query.register(process_edit_amount, F.data == "edit_amount", TransactionStates.editing_draft)
+    dp.callback_query.register(process_edit_comment, F.data == "edit_comment", TransactionStates.editing_draft)
+    dp.callback_query.register(confirm_draft, F.data == "confirm_draft", TransactionStates.editing_draft)
+    dp.callback_query.register(cancel_draft, F.data == "cancel_draft", TransactionStates.editing_draft)
 
 
 async def process_edit_type(callback: types.CallbackQuery, state: FSMContext):
@@ -440,7 +439,7 @@ async def process_edit_comment(callback: types.CallbackQuery, state: FSMContext)
     )
 
 
-async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transaction_service: TransactionService):
+async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, data: dict, transaction_service: TransactionService):
     """Подтверждение и запись черновика транзакции"""
     from utils.service_wrappers import safe_answer, edit_or_send
     # from services.global_service_locator import get_transaction_service # Removed
@@ -464,13 +463,24 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transa
             return
         
         # Создаем объект транзакции
+        # Получаем информацию о пользователе из middleware
+        current_user = data.get('current_user')
+        if not current_user:
+            await edit_or_send(
+                callback.bot,
+                callback.message,
+                "❌ Ошибка: невозможно получить информацию о пользователе.",
+                parse_mode="Markdown"
+            )
+            return
+
         transaction_data = TransactionData(
             type=data['transaction_type'],
             category=data['category'],
             amount=data['amount'],
             comment=data.get('comment', ''),
             username=callback.from_user.username or callback.from_user.full_name,
-            user_id=callback.from_user.id,
+            user_id=current_user['telegram_id'],  # Используем ID из middleware
             retailer_name=data.get('retailer_name', ''),
             items_list=data.get('items_list', ''),
             payment_info=data.get('payment_info', ''),

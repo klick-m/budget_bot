@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram import F
 
 # Импорты из нашей структуры
-from config import ALLOWED_USER_IDS, CATEGORY_STORAGE, logger, SHEET_WRITE_TIMEOUT
+from config import CATEGORY_STORAGE, logger, SHEET_WRITE_TIMEOUT
 from models.transaction import TransactionData, CheckData
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -31,13 +31,6 @@ import aiohttp
 # --- A. ФИЛЬТР И FSM ---
 # ----------------------------------------------------------------------
 
-class AllowedUsersFilter(BaseFilter):
-    """Проверяет, является ли отправитель сообщения разрешенным пользователем."""
-    async def __call__(self, message: types.Message) -> bool:
-        if not ALLOWED_USER_IDS:
-             return True # Если список разрешенных ID пуст, разрешаем всем
-             
-        return message.from_user.id in ALLOWED_USER_IDS
 
 
 @dataclass
@@ -59,7 +52,7 @@ from utils.states import TransactionStates
 # --- D. ХЕНДЛЕР ЧЕКОВ (СЛОЖНЫЙ) ---
 # ----------------------------------------------------------------------
 
-async def handle_photo(message: types.Message, state: FSMContext, transaction_service: TransactionService):
+async def handle_photo(message: types.Message, state: FSMContext, data: dict, transaction_service: TransactionService):
     await state.clear()
     
     try:
@@ -110,9 +103,15 @@ async def handle_photo(message: types.Message, state: FSMContext, transaction_se
             await edit_or_send(message.bot, status_msg, f"❌ {e}. Введите вручную: /new_transaction")
             return
 
+        # Получаем информацию о пользователе из middleware
+        current_user = data.get('current_user')
+        if not current_user:
+            await edit_or_send(message.bot, status_msg, "❌ Ошибка: невозможно получить информацию о пользователе.")
+            return
+
         # 3. Обработка данных чека через TransactionService
         try:
-            transaction = await service.process_check_data(parsed_data, message.from_user.username or message.from_user.full_name, message.from_user.id)
+            transaction = await service.process_check_data(parsed_data, message.from_user.username or message.from_user.full_name, current_user['telegram_id'])  # Используем ID из middleware
         except Exception as e:
             await edit_or_send(message.bot, status_msg, f"❌ Ошибка обработки данных чека: {e}")
             return
@@ -149,7 +148,7 @@ async def handle_photo(message: types.Message, state: FSMContext, transaction_se
             amount=parsed_data.amount,
             comment=parsed_data.comment,
             username=message.from_user.username or message.from_user.full_name,
-            user_id=message.from_user.id,
+            user_id=current_user['telegram_id'],  # Используем ID из middleware
             retailer_name=parsed_data.retailer_name,
             items_list=parsed_data.items_list,
             payment_info=parsed_data.payment_info,
@@ -337,13 +336,24 @@ async def process_cancel_check(callback: types.CallbackQuery, state: FSMContext,
          logger.error(f"Не удалось отправить сообщение об отмене чека: {e}")
 
 
-async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, transaction_service: TransactionService):
+async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, data: dict, transaction_service: TransactionService):
     """Подтверждает и записывает транзакцию из чека после выбора категории вручную."""
     await safe_answer(callback)
     
     try:
         data = await state.get_data()
         
+        # Получаем информацию о пользователе из middleware
+        current_user = data.get('current_user')
+        if not current_user:
+            await edit_or_send(
+                bot,
+                callback.message,
+                "❌ Ошибка: невозможно получить информацию о пользователе.",
+                parse_mode="Markdown"
+            )
+            return
+
         # Создаем объект транзакции
         transaction_data = TransactionData(
             type=data.get('type', 'Расход'),
@@ -351,7 +361,7 @@ async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext
             amount=data['amount'],
             comment=data.get('comment', '').replace('|', '\n• '),
             username=callback.from_user.username or callback.from_user.full_name,
-            user_id=callback.from_user.id,
+            user_id=current_user['telegram_id'],  # Используем ID из middleware
             retailer_name=data.get('retailer_name', ''),
             items_list=data.get('items_list', ''),
             payment_info=data.get('payment_info', ''),
@@ -393,13 +403,24 @@ async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext
         await edit_or_send(bot, callback.message, f"❌ **Ошибка:** {e}")
 
 
-async def process_confirm_auto_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, transaction_service: TransactionService):
+async def process_confirm_auto_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, data: dict, transaction_service: TransactionService):
     """Подтверждает и записывает автоматически распознанный чек."""
     await safe_answer(callback)
     
     try:
         data = await state.get_data()
         
+        # Получаем информацию о пользователе из middleware
+        current_user = data.get('current_user')
+        if not current_user:
+            await edit_or_send(
+                bot,
+                callback.message,
+                "❌ Ошибка: невозможно получить информацию о пользователе.",
+                parse_mode="Markdown"
+            )
+            return
+
         # Создаем объект транзакции
         transaction_data = TransactionData(
             type=data.get('type', 'Расход'),
@@ -407,7 +428,7 @@ async def process_confirm_auto_check(callback: types.CallbackQuery, state: FSMCo
             amount=data['amount'],
             comment=data.get('comment', '').replace('|', '\n• '),
             username=callback.from_user.username or callback.from_user.full_name,
-            user_id=callback.from_user.id,
+            user_id=current_user['telegram_id'],  # Используем ID из middleware
             retailer_name=data.get('retailer_name', ''),
             items_list=data.get('items_list', ''),
             payment_info=data.get('payment_info', ''),
@@ -627,7 +648,7 @@ async def process_split_category_choice(callback: types.CallbackQuery, state: FS
         await show_splitting_ui(callback, state)
 
 
-async def finalize_split_transactions(callback: types.CallbackQuery, state: FSMContext, transaction_service: TransactionService):
+async def finalize_split_transactions(callback: types.CallbackQuery, state: FSMContext, data: dict, transaction_service: TransactionService):
     """Сохраняет все транзакции из сплита."""
     data = await state.get_data()
     session = data.get('split_session')
@@ -654,6 +675,17 @@ async def finalize_split_transactions(callback: types.CallbackQuery, state: FSMC
     
     for group in session['completed_groups']:
         try:
+            # Получаем информацию о пользователе из middleware
+            current_user = data.get('current_user')
+            if not current_user:
+                await edit_or_send(
+                    callback.bot,
+                    callback.message,
+                    "❌ Ошибка: невозможно получить информацию о пользователе.",
+                    parse_mode="Markdown"
+                )
+                return
+
             # Создаем транзакцию
             transaction = TransactionData(
                 type="Расход", # В чеках обычно расход
@@ -661,7 +693,7 @@ async def finalize_split_transactions(callback: types.CallbackQuery, state: FSMC
                 amount=group['amount'],
                 comment=group['items_str'][:100], # Ограничим длину комментария
                 username=callback.from_user.username or callback.from_user.full_name,
-                user_id=callback.from_user.id,
+                user_id=current_user['telegram_id'],  # Используем ID из middleware
                 retailer_name=check_base.retailer_name,
                 items_list=group['items_str'],
                 payment_info=check_base.payment_info,
@@ -695,20 +727,20 @@ def register_receipt_handlers(dp: Router):
     # ... (старые хендлеры)
     
     # Хендлер на фото/документ
-    dp.message.register(handle_photo, F.photo | F.document, AllowedUsersFilter())
+    dp.message.register(handle_photo, F.photo | F.document)
     
     # Callback для подтверждения чека
-    dp.callback_query.register(process_confirm_check, F.data == "confirm_check", TransactionStates.confirming_check, AllowedUsersFilter())
-    dp.callback_query.register(process_cancel_check, F.data == "cancel_check", AllowedUsersFilter())
+    dp.callback_query.register(process_confirm_check, F.data == "confirm_check", TransactionStates.confirming_check)
+    dp.callback_query.register(process_cancel_check, F.data == "cancel_check")
     
     # Callback для авто-чека
-    dp.callback_query.register(process_confirm_auto_check, F.data == "confirm_auto_check", TransactionStates.confirming_auto_check, AllowedUsersFilter())
-    dp.callback_query.register(process_edit_category, F.data == "change_category", TransactionStates.confirming_auto_check, AllowedUsersFilter())
-    dp.callback_query.register(process_category_choice_after_check, F.data.startswith("checkcat_"), TransactionStates.choosing_category_after_check, AllowedUsersFilter())
+    dp.callback_query.register(process_confirm_auto_check, F.data == "confirm_auto_check", TransactionStates.confirming_auto_check)
+    dp.callback_query.register(process_edit_category, F.data == "change_category", TransactionStates.confirming_auto_check)
+    dp.callback_query.register(process_category_choice_after_check, F.data.startswith("checkcat_"), TransactionStates.choosing_category_after_check)
     
     # NEW: Split handlers
-    dp.callback_query.register(start_splitting_check, F.data == "split_check", AllowedUsersFilter())
-    dp.callback_query.register(toggle_split_item, F.data.startswith("toggle_item_"), TransactionStates.splitting_items, AllowedUsersFilter())
-    dp.callback_query.register(confirm_split_group_items, F.data == "split_next_step", TransactionStates.splitting_items, AllowedUsersFilter())
-    dp.callback_query.register(process_split_category_choice, F.data.startswith("splitcat_"), TransactionStates.splitting_choose_category, AllowedUsersFilter())
-    dp.callback_query.register(process_confirm_auto_check, F.data == "comment_none", TransactionStates.confirming_auto_check, AllowedUsersFilter())
+    dp.callback_query.register(start_splitting_check, F.data == "split_check")
+    dp.callback_query.register(toggle_split_item, F.data.startswith("toggle_item_"), TransactionStates.splitting_items)
+    dp.callback_query.register(confirm_split_group_items, F.data == "split_next_step", TransactionStates.splitting_items)
+    dp.callback_query.register(process_split_category_choice, F.data.startswith("splitcat_"), TransactionStates.splitting_choose_category)
+    dp.callback_query.register(process_confirm_auto_check, F.data == "comment_none", TransactionStates.confirming_auto_check)

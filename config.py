@@ -37,8 +37,9 @@ load_dotenv()
 
 # --- Настройки Telegram и доступа ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALLOWED_USER_IDS_RAW = os.getenv("ALLOWED_USER_IDS", "")
-ALLOWED_USER_IDS = [int(i.strip()) for i in ALLOWED_USER_IDS_RAW.split(',') if i.strip().isdigit()]
+# OLD: ALLOWED_USER_IDS_RAW = os.getenv("ALLOWED_USER_IDS", "")
+# OLD: ALLOWED_USER_IDS = [int(i.strip()) for i in ALLOWED_USER_IDS_RAW.split(',') if i.strip().isdigit()]
+# NOTE: Заменено на централизованную авторизацию через AuthMiddleware
 
 # --- Настройки Google Sheets ---
 GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL")

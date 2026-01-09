@@ -1,4 +1,5 @@
 # utils/service_wrappers.py
+from typing import Dict, Any, Optional
 from aiogram import Bot, types
 from aiogram.exceptions import TelegramBadRequest
 from config import logger
@@ -6,6 +7,9 @@ from aiogram.types import ReplyKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 import inspect
 from unittest.mock import MagicMock, AsyncMock, Mock
+
+# Импортируем модели и репозиторий для middleware
+from services.repository import TransactionRepository
 
 
 async def safe_answer(callback: types.CallbackQuery):
@@ -107,3 +111,34 @@ async def clean_previous_kb(bot: Bot, state: FSMContext, chat_id: int):
         
         # Clear the ID from state
         await state.update_data(last_kb_msg_id=None)
+
+
+class AuthMiddleware:
+    """
+    Middleware для проверки авторизации пользователей.
+    Извлекает пользователя из БД по telegram_id, если пользователь отсутствует - прерывает обработку.
+    """
+    
+    def __init__(self, repo: TransactionRepository):
+        self.repo = repo
+
+    async def __call__(self, handler, event, data: Dict[str, Any]) -> Optional[Any]:
+        # Проверяем наличие информации о пользователе в событии (Message или CallbackQuery)
+        user = getattr(event, 'from_user', None)
+        if user is None:
+            # Если нет информации о пользователе, не продолжаем обработку
+            return None
+
+        # Получаем telegram_id пользователя
+        telegram_id = user.id
+
+        # Проверяем, существует ли пользователь в БД
+        user_data = await self.repo.get_user_by_telegram_id(telegram_id)
+        if user_data is None:
+            # Если пользователя нет в БД, не продолжаем обработку
+            return None
+
+        # Если пользователь существует, продолжаем обработку
+        # Добавляем информацию о пользователе в данные для доступа в хендлере
+        data['current_user'] = user_data
+        return await handler(event, data)

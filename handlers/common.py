@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram import F
 
 # Импорт из нашей структуры
-from config import ALLOWED_USER_IDS, CATEGORY_STORAGE, logger
+from config import CATEGORY_STORAGE, logger
 from models.transaction import TransactionData, CheckData
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -21,7 +21,7 @@ from utils.keyboards import get_main_keyboard, get_history_keyboard, HistoryCall
 from sheets.client import get_latest_transactions
 from services.repository import TransactionRepository
 from services.transaction_service import TransactionService
-from services.transaction_service import TransactionService
+from services.analytics_service import AnalyticsService
 from utils.messages import MSG
 from aiogram.filters import Command, or_f
 
@@ -29,13 +29,6 @@ from aiogram.filters import Command, or_f
 # --- A. ФИЛЬТР И FSM ---
 # ----------------------------------------------------------------------
 
-class AllowedUsersFilter(BaseFilter):
-    """Проверяет, является ли отправитель сообщения разрешенным пользователем."""
-    async def __call__(self, message: types.Message) -> bool:
-        if not ALLOWED_USER_IDS:
-             return True # Если список разрешенных ID пуст, разрешаем всем
-             
-        return message.from_user.id in ALLOWED_USER_IDS
 
 
 # --- C. ХЕНДЛЕРЫ КОМАНД И ОСНОВНЫЕ ФУНКЦИИ ---
@@ -64,16 +57,22 @@ async def command_start_handler(message: types.Message, state: FSMContext):
     )
 
 
-async def test_sheets_handler(message: types.Message, transaction_service: TransactionService):
+async def test_sheets_handler(message: types.Message, data: dict, transaction_service: TransactionService):
     status_msg = await message.answer(MSG.test_transaction_start)
 
+    # Получаем информацию о пользователе из middleware
+    current_user = data.get('current_user')
+    if not current_user:
+        await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
+        return
+    
     test_data = TransactionData(
         type='ТЕСТ',
         category='Связь',
         amount=1.00,
         comment='Проверка связи с ботом',
         username=message.from_user.username or message.from_user.full_name,
-        user_id=message.from_user.id,
+        user_id=current_user['telegram_id'],  # Используем ID из middleware
         transaction_dt=datetime.now()
     )
     
@@ -111,10 +110,16 @@ async def test_sheets_handler(message: types.Message, transaction_service: Trans
 # ----------------------------------------------------------------------
 
 
-async def undo_command_handler(message: types.Message):
+async def undo_command_handler(message: types.Message, data: dict):
     """Обработчик команды /undo для удаления последних транзакций."""
+    # Получаем информацию о пользователе из middleware
+    current_user = data.get('current_user')
+    if not current_user:
+        await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
+        return
+    
     # Получаем последние 3 транзакции
-    user_id = str(message.from_user.id)
+    user_id = str(current_user['telegram_id'])  # Используем ID из middleware
     transactions = await get_latest_transactions(user_id=user_id, limit=3, offset=0)
     
     if not transactions:
@@ -167,7 +172,7 @@ def create_undo_keyboard(transactions: list) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-async def undo_callback_handler(callback: types.CallbackQuery, transaction_service: TransactionService):
+async def undo_callback_handler(callback: types.CallbackQuery, data: dict, transaction_service: TransactionService):
     """Обработчик нажатия кнопок удаления транзакций."""
     await safe_answer(callback)  # Безопасно отвечаем на callback
     
@@ -196,9 +201,15 @@ async def undo_callback_handler(callback: types.CallbackQuery, transaction_servi
         service = transaction_service
         # Check removed
 
+        # Получаем информацию о пользователе из middleware
+        current_user = data.get('current_user')
+        if not current_user:
+            await callback.message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
+            return
+
         # Удаляем транзакцию через сервис
         result = await service.delete_transaction_by_details(
-            user_id=str(callback.from_user.id),
+            user_id=str(current_user['telegram_id']),  # Используем ID из middleware
             date=transaction_date,
             time=transaction_time,
             amount=float(transaction_amount)
@@ -257,10 +268,16 @@ async def close_undo_handler(callback: types.CallbackQuery):
 # --- КОМАНДА ИСТОРИИ ТРАНЗАКЦИЙ ---
 # ----------------------------------------------------------------------
 
-async def history_command_handler(message: types.Message):
+async def history_command_handler(message: types.Message, data: dict):
     """Обработчик команды /history для просмотра последних транзакций."""
+    # Получаем информацию о пользователе из middleware
+    current_user = data.get('current_user')
+    if not current_user:
+        await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
+        return
+    
     # Получаем последние 5 транзакций с нулевым смещением
-    user_id = message.from_user.username or str(message.from_user.id)
+    user_id = current_user.get('username') or str(current_user['telegram_id'])  # Используем данные из middleware
     transactions = await get_latest_transactions(user_id=user_id, limit=5, offset=0)
     
     if not transactions:
@@ -293,15 +310,29 @@ async def history_command_handler(message: types.Message):
     await message.answer(history_text, reply_markup=keyboard, parse_mode="Markdown")
 
 
-async def history_callback_handler(callback: types.CallbackQuery, callback_data: HistoryCallbackData):
+async def history_callback_handler(callback: types.CallbackQuery, callback_data: HistoryCallbackData, data: dict):
     """Обработчик кнопок пагинации истории транзакций."""
     await safe_answer(callback)  # Безопасно отвечаем на callback
     
     offset = callback_data.offset
     direction = callback_data.direction
     
+    # Получаем информацию о пользователе из middleware
+    current_user = data.get('current_user')
+    if not current_user:
+        try:
+            await edit_or_send(
+                callback.bot,
+                callback.message,
+                "❌ Ошибка: невозможно получить информацию о пользователе.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            logger.error("Не удалось отправить сообщение об ошибке в history_callback_handler")
+        return
+
     # Получаем транзакции с новым смещением
-    user_id = callback.from_user.username or str(callback.from_user.id)
+    user_id = current_user.get('username') or str(current_user['telegram_id'])  # Используем данные из middleware
     transactions = await get_latest_transactions(user_id=user_id, limit=5, offset=offset)
     
     if not transactions:
@@ -383,21 +414,65 @@ async def close_history_handler(callback: types.CallbackQuery):
             logger.error("Не удалось удалить или отредактировать сообщение в close_history_handler")
 
 
+# --- КОМАНДА ОТЧЕТА ---
+# ----------------------------------------------------------------------
+
+
+async def report_command_handler(message: types.Message, data: dict, analytics_service: AnalyticsService):
+    """Обработчик команды /report для генерации и отправки графика расходов."""
+    # Получаем информацию о пользователе из middleware
+    current_user = data.get('current_user')
+    if not current_user:
+        await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
+        return
+    
+    user_id = current_user['telegram_id']
+    
+    try:
+        # Показываем статус пользователю
+        status_msg = await message.answer("📊 Генерируем отчет...")
+        
+        # Генерируем график расходов
+        chart_buffer = await analytics_service.generate_expenses_pie_chart(
+            user_id,
+            title="Расходы по категориям за текущий месяц"
+        )
+        
+        # Отправляем график пользователю
+        await message.answer_photo(
+            photo=types.BufferedInputFile(chart_buffer.read(), filename="report.png"),
+            caption="📊 Ваш отчет о расходах за текущий месяц"
+        )
+        
+        # Удаляем сообщение со статусом
+        await status_msg.delete()
+        
+    except Exception as e:
+        logger.error(f"Ошибка при генерации отчета: {e}")
+        try:
+            await message.answer(f"❌ Ошибка при генерации отчета: {str(e)}")
+        except Exception:
+            logger.error(f"Не удалось отправить сообщение об ошибке: {e}")
+
+
 # --- РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ---
 # ----------------------------------------------------------------------
 
 def register_common_handlers(dp: Router):
     """Регистрирует общые хендлеры"""
     # Регистрируем команды
-    dp.message.register(command_start_handler, Command(commands=["start"]), AllowedUsersFilter())
-    dp.message.register(test_sheets_handler, or_f(Command(commands=["test_sheets"]), F.text == "🧪 Проверить Sheets"), AllowedUsersFilter())
-    dp.message.register(undo_command_handler, Command(commands=["undo"]), AllowedUsersFilter())
-    dp.message.register(history_command_handler, or_f(Command(commands=["history"]), F.text == "📜 История транзакций"), AllowedUsersFilter())
+    dp.message.register(command_start_handler, Command(commands=["start"]))
+    dp.message.register(test_sheets_handler, or_f(Command(commands=["test_sheets"]), F.text == "🧪 Проверить Sheets"))
+    dp.message.register(undo_command_handler, Command(commands=["undo"]))
+    dp.message.register(history_command_handler, or_f(Command(commands=["history"]), F.text == "📜 История транзакций"))
     
     # Регистрируем обработчики callback'ов для undo
-    dp.callback_query.register(undo_callback_handler, F.data.startswith("undo_"), AllowedUsersFilter())
-    dp.callback_query.register(close_undo_handler, F.data == "close_undo", AllowedUsersFilter())
+    dp.callback_query.register(undo_callback_handler, F.data.startswith("undo_"))
+    dp.callback_query.register(close_undo_handler, F.data == "close_undo")
     
     # Регистрируем обработчики callback'ов для истории
-    dp.callback_query.register(history_callback_handler, HistoryCallbackData.filter(), AllowedUsersFilter())
-    dp.callback_query.register(close_history_handler, F.data == "close_history", AllowedUsersFilter())
+    dp.callback_query.register(history_callback_handler, HistoryCallbackData.filter())
+    dp.callback_query.register(close_history_handler, F.data == "close_history")
+    
+    # Регистрируем команду отчета
+    dp.message.register(report_command_handler, or_f(Command(commands=["report"]), F.text == "📊 Отчет"))

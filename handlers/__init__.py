@@ -7,6 +7,7 @@ def register_all_handlers(dp: Router):
     from .receipts import register_receipt_handlers
     from .manual import register_manual_handlers, register_draft_handlers
     from .smart_input import register_smart_input_handlers
+    from .admin import register_admin_handlers
     
     # Регистрируем хендлеры
     register_common_handlers(dp)
@@ -15,6 +16,7 @@ def register_all_handlers(dp: Router):
     register_draft_handlers(dp)
     # register_text_parser_handler(dp)  # Эта функция больше не используется
     register_smart_input_handlers(dp)
+    register_admin_handlers(dp)
 
 # Создаем главный роутер
 dp = Router()

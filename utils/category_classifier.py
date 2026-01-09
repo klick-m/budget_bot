@@ -35,16 +35,12 @@ class TransactionCategoryClassifier:
         self.total_transactions = 0
         self.categories = set()
         
-        # Инициализация MorphAnalyzer для лемматизации
-        if MorphAnalyzer:
-            try:
-                self.morph_analyzer = MorphAnalyzer()
-            except Exception as e:
-                logger.warning(f"⚠️ Не удалось инициализировать pymorphy3 MorphAnalyzer: {e}")
-                self.morph_analyzer = None
-        else:
-            logger.warning("⚠️ pymorphy3 не установлен, лемматизация будет недоступна")
-            self.morph_analyzer = None
+        # Используем глобальный экземпляр MorphAnalyzer из лемматизатора для избежания дублирования инициализаций
+        from utils.lemmatizer import Lemmatizer
+        self.morph_analyzer = Lemmatizer.get_global_analyzer()
+        
+        if self.morph_analyzer is None:
+            logger.warning("⚠️ pymorphy3 не установлен или не инициализирован, лемматизация будет недоступна")
         
         # Интеграция с новой системой KeywordDictionary
         if keyword_dict is None:
@@ -418,5 +414,15 @@ class TransactionCategoryClassifier:
                 category in self.keyword_dict.category_keywords if hasattr(self.keyword_dict, 'category_keywords') else True)
 
 
-# Глобальный экземпляр классификатора
-classifier = TransactionCategoryClassifier()
+# Глобальный экземпляр классификатора для избежания дублирования инициализаций
+_classifier_instance = None
+
+def get_global_classifier():
+    """Получить глобальный экземпляр классификатора"""
+    global _classifier_instance
+    if _classifier_instance is None:
+        _classifier_instance = TransactionCategoryClassifier()
+    return _classifier_instance
+
+# Устаревший способ получения глобального экземпляра, оставлен для обратной совместимости
+classifier = get_global_classifier()
