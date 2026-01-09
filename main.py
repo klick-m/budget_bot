@@ -2,6 +2,7 @@
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramConflictError
 
 # Импортируем из нашей новой структуры
 from config import BOT_TOKEN, logger
@@ -12,6 +13,7 @@ from sheets.client import load_categories_from_sheet, write_transaction
 from services.sync_worker import start_sync_worker
 from utils.service_wrappers import AuthMiddleware
 from services.analytics_service import AnalyticsService
+from services.auth_service import AuthService
 
 
 async def main():
@@ -44,11 +46,15 @@ async def main():
     auth_middleware = AuthMiddleware(repo=transaction_repository)
     dp.message.middleware(auth_middleware)
     dp.callback_query.middleware(auth_middleware)
+    # Создаем AuthService
+    auth_service = AuthService(repo=transaction_repository)
+    
     # Внедрение зависимостей
     analytics_service = AnalyticsService(repository=transaction_repository)
     dp.workflow_data.update({
         "transaction_service": transaction_service,
-        "analytics_service": analytics_service
+        "analytics_service": analytics_service,
+        "auth_service": auth_service  # Добавляем auth_service в конец, как указано в инструкции
     })
 
 
@@ -75,6 +81,9 @@ async def main():
         
         # Запускаем polling с обработкой конфликтов
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    except TelegramConflictError as e:
+        logger.error(f"Telegram Conflict Error: {e}. Это может означать, что другой экземпляр бота уже запущен.")
+        logger.info("Завершение работы бота...")
     except KeyboardInterrupt:
         logger.info("Получен сигнал KeyboardInterrupt. Завершение работы...")
     except Exception as e:

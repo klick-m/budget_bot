@@ -13,3 +13,10 @@ class TransactionStates(StatesGroup):
     waiting_for_category_selection = State()  # Состояние ожидания выбора категории
     splitting_items = State() # Выбор товаров для разделения
     splitting_choose_category = State() # Выбор категории для группы товаров
+
+class AdminStates(StatesGroup):
+    main_menu = State()
+    users_menu = State()
+    stats_menu = State()
+    reports_menu = State()
+    settings_menu = State()

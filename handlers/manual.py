@@ -191,7 +191,7 @@ async def process_amount_input(message: types.Message, state: FSMContext):
     await state.set_state(TransactionStates.entering_comment)
 
 
-async def process_comment_input(message: types.Message, state: FSMContext, data: dict):
+async def process_comment_input(message: types.Message, state: FSMContext, current_user: Optional[dict] = None):
     """Обрабатывает ввод комментария."""
     user_input_raw = message.text.strip()
     user_input = user_input_raw.lower()
@@ -211,8 +211,7 @@ async def process_comment_input(message: types.Message, state: FSMContext, data:
     # Получаем все данные для подтверждения
     data = await state.get_data()
     
-    # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
+    # Получаем информацию о пользователе из middleware (передается напрямую)
     if not current_user:
         await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
         return
@@ -439,7 +438,7 @@ async def process_edit_comment(callback: types.CallbackQuery, state: FSMContext)
     )
 
 
-async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, data: dict, transaction_service: TransactionService):
+async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transaction_service: TransactionService, current_user: Optional[dict] = None):
     """Подтверждение и запись черновика транзакции"""
     from utils.service_wrappers import safe_answer, edit_or_send
     # from services.global_service_locator import get_transaction_service # Removed
@@ -461,10 +460,9 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, data: 
                 parse_mode="Markdown"
             )
             return
-        
+         
         # Создаем объект транзакции
-        # Получаем информацию о пользователе из middleware
-        current_user = data.get('current_user')
+        # Получаем информацию о пользователе из middleware (передается напрямую)
         if not current_user:
             await edit_or_send(
                 callback.bot,

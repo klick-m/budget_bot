@@ -1,9 +1,12 @@
 # handlers/admin.py
 from aiogram import Router, types
 from aiogram.filters import Command
-from typing import Dict, Any
+from aiogram.fsm.context import FSMContext
+from typing import Dict, Any, Optional
 from services.auth_service import AuthService
 from utils.messages import MSG
+from utils.keyboards import get_admin_main_keyboard, get_admin_users_keyboard, get_admin_stats_keyboard
+from utils.states import AdminStates
 import re
 
 
@@ -22,18 +25,120 @@ def is_admin(current_user: Dict[str, Any]) -> bool:
     return current_user.get('role', 'user') == 'admin'
 
 
-async def admin_command_handler(message: types.Message, data: dict, auth_service: AuthService):
+class AdminPanel:
+    """Класс для обработки интерактивной админ-панели с FSM"""
+    
+    @staticmethod
+    async def admin_menu(message: types.Message, state: FSMContext, auth_service: AuthService, current_user: Optional[dict] = None):
+        """
+        Обработчик команды /admin для открытия интерактивной панели администратора.
+        
+        Args:
+            message: Объект сообщения от пользователя
+            state: FSM контекст
+            auth_service: Сервис аутентификации для проверки прав
+            current_user: Словарь с информацией о пользователе из middleware
+        """
+        # Проверяем права администратора
+        if not is_admin(current_user):
+            await message.answer("❌ *Доступ запрещен.*\nТолько администраторы могут использовать эту команду.", parse_mode="Markdown")
+            return
+        
+        # Устанавливаем состояние главного меню
+        await state.set_state(AdminStates.main_menu)
+        
+        # Формируем сообщение с административными командами
+        admin_menu = """
+🛡 *Панель администратора*
+
+Выберите действие:
+        """
+        
+        # Отправляем сообщение с inline-клавиатурой
+        keyboard = get_admin_main_keyboard()
+        await message.answer(admin_menu, parse_mode="Markdown", reply_markup=keyboard)
+
+    @staticmethod
+    async def manage_users(callback: types.CallbackQuery, state: FSMContext):
+        """
+        Обработчик для перехода в меню управления пользователями.
+        
+        Args:
+            callback: Объект callback запроса
+            state: FSM контекст
+        """
+        await state.set_state(AdminStates.users_menu)
+        
+        users_menu = """
+👥 *Управление пользователями*
+
+Выберите действие:
+        """
+        
+        keyboard = get_admin_users_keyboard()
+        await callback.message.edit_text(users_menu, parse_mode="Markdown", reply_markup=keyboard)
+        await callback.answer()
+
+    @staticmethod
+    async def view_statistics(callback: types.CallbackQuery, state: FSMContext):
+        """
+        Обработчик для просмотра статистики.
+        
+        Args:
+            callback: Объект callback запроса
+            state: FSM контекст
+        """
+        await state.set_state(AdminStates.stats_menu)
+        
+        stats_menu = """
+📊 *Статистика и отчеты*
+
+Выберите тип статистики:
+        """
+        
+        keyboard = get_admin_stats_keyboard()
+        await callback.message.edit_text(stats_menu, parse_mode="Markdown", reply_markup=keyboard)
+        await callback.answer()
+
+    @staticmethod
+    async def cancel_admin_session(callback: types.CallbackQuery, state: FSMContext):
+        """
+        Обработчик для отмены сессии админ-панели.
+        
+        Args:
+            callback: Объект callback запроса
+            state: FSM контекст
+        """
+        await state.clear()
+        
+        cancel_message = """
+✅ *Сессия админ-панели завершена*
+
+Вы вышли из режима администрирования.
+        """
+        
+        # Возвращаем основную клавиатуру
+        from utils.keyboards import get_main_keyboard
+        keyboard = get_main_keyboard(is_admin=True)
+        await callback.message.edit_text(cancel_message, parse_mode="Markdown")
+        # Используем bot.send_message для отправки сообщения с клавиатурой
+        await callback.bot.send_message(
+            chat_id=callback.message.chat.id,
+            text="👆 Выберите действие:",
+            reply_markup=keyboard
+        )
+        await callback.answer()
+
+
+async def admin_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
     """
     Обработчик команды /admin для открытия панели администратора.
     
     Args:
         message: Объект сообщения от пользователя
-        data: Данные контекста (включая информацию о пользователе)
         auth_service: Сервис аутентификации для работы с пользователями
+        current_user: Словарь с информацией о пользователе из middleware
     """
-    # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
-    
     # Проверяем права администратора
     if not is_admin(current_user):
         await message.answer("❌ *Доступ запрещен.*\nТолько администраторы могут использовать эту команду.", parse_mode="Markdown")
@@ -45,7 +150,7 @@ async def admin_command_handler(message: types.Message, data: dict, auth_service
 
 Доступные команды:
 • `/add_user <telegram_id> <username> <role> <limit>` - Добавить пользователя
-• `/remove_user <telegram_id>` - Удалить пользователя  
+• `/remove_user <telegram_id>` - Удалить пользователя
 • `/set_role <telegram_id> <role>` - Изменить роль пользователя
 • `/list_users` - Список всех пользователей
 
@@ -56,20 +161,22 @@ async def admin_command_handler(message: types.Message, data: dict, auth_service
     """
     
     await message.answer(admin_menu, parse_mode="Markdown")
+    
+    # Отправляем сообщение с основной клавиатурой, чтобы пользователь мог вернуться к обычному режиму
+    from utils.keyboards import get_main_keyboard
+    keyboard = get_main_keyboard(is_admin=True)
+    await message.answer("👆 Выберите действие:", reply_markup=keyboard)
 
 
-async def add_user_command_handler(message: types.Message, data: dict, auth_service: AuthService):
+async def add_user_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
     """
     Обработчик команды /add_user для добавления нового пользователя.
     
     Args:
         message: Объект сообщения от пользователя
-        data: Данные контекста (включая информацию о пользователе)
         auth_service: Сервис аутентификации для работы с пользователями
+        current_user: Словарь с информацией о пользователе из middleware
     """
-    # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
-    
     # Проверяем права администратора
     if not is_admin(current_user):
         await message.answer("❌ *Доступ запрещен.*\nТолько администраторы могут добавлять пользователей.", parse_mode="Markdown")
@@ -132,18 +239,15 @@ async def add_user_command_handler(message: types.Message, data: dict, auth_serv
         )
 
 
-async def remove_user_command_handler(message: types.Message, data: dict, auth_service: AuthService):
+async def remove_user_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
     """
     Обработчик команды /remove_user для удаления пользователя.
     
     Args:
         message: Объект сообщения от пользователя
-        data: Данные контекста (включая информацию о пользователе)
         auth_service: Сервис аутентификации для работы с пользователями
+        current_user: Словарь с информацией о пользователе из middleware
     """
-    # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
-    
     # Проверяем права администратора
     if not is_admin(current_user):
         await message.answer("❌ *Доступ запрещен.*\nТолько администраторы могут удалять пользователей.", parse_mode="Markdown")
@@ -191,18 +295,15 @@ async def remove_user_command_handler(message: types.Message, data: dict, auth_s
         )
 
 
-async def set_role_command_handler(message: types.Message, data: dict, auth_service: AuthService):
+async def set_role_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
     """
     Обработчик команды /set_role для изменения роли пользователя.
     
     Args:
         message: Объект сообщения от пользователя
-        data: Данные контекста (включая информацию о пользователе)
         auth_service: Сервис аутентификации для работы с пользователями
+        current_user: Словарь с информацией о пользователе из middleware
     """
-    # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
-    
     # Проверяем права администратора
     if not is_admin(current_user):
         await message.answer("❌ *Доступ запрещен.*\nТолько администраторы могут изменять роли пользователей.", parse_mode="Markdown")
@@ -260,18 +361,15 @@ async def set_role_command_handler(message: types.Message, data: dict, auth_serv
         )
 
 
-async def list_users_command_handler(message: types.Message, data: dict, auth_service: AuthService):
+async def list_users_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
     """
     Обработчик команды /list_users для получения списка всех пользователей.
     
     Args:
         message: Объект сообщения от пользователя
-        data: Данные контекста (включая информацию о пользователе)
         auth_service: Сервис аутентификации для работы с пользователями
+        current_user: Словарь с информацией о пользователе из middleware
     """
-    # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
-    
     # Проверяем права администратора
     if not is_admin(current_user):
         await message.answer("❌ *Доступ запрещен.*\nТолько администраторы могут просматривать список пользователей.", parse_mode="Markdown")
@@ -305,6 +403,59 @@ async def list_users_command_handler(message: types.Message, data: dict, auth_se
         )
 
 
+# FSM обработчики для интерактивной админ-панели
+async def admin_callback_handler(callback: types.CallbackQuery, state: FSMContext, auth_service: AuthService, current_user: Optional[dict] = None):
+    """
+    Обработчик callback'ов для интерактивной админ-панели.
+    
+    Args:
+        callback: Объект callback запроса
+        state: FSM контекст
+        auth_service: Сервис аутентификации для проверки прав
+        current_user: Словарь с информацией о пользователе из middleware
+    """
+    # Проверяем права администратора
+    if not is_admin(current_user):
+        await callback.answer("❌ Доступ запрещен. Только администраторы могут использовать эту функцию.", show_alert=True)
+        return
+    
+    data = callback.data
+    
+    if data == "manage_users":
+        await AdminPanel.manage_users(callback, state)
+    elif data == "view_stats":
+        await AdminPanel.view_statistics(callback, state)
+    elif data == "admin_settings":
+        # Пока не реализовано, возвращаем в главное меню
+        await callback.answer("🔧 Настройки: функция в разработке", show_alert=True)
+        await AdminPanel.admin_menu(callback.message, state, auth_service, current_user)
+    elif data == "cancel_admin":
+        await AdminPanel.cancel_admin_session(callback, state)
+    elif data == "add_user_admin":
+        # Переход к добавлению пользователя
+        await callback.answer("➕ Добавление пользователя: используйте команду /add_user", show_alert=True)
+    elif data == "remove_user_admin":
+        # Переход к удалению пользователя
+        await callback.answer("🗑️ Удаление пользователя: используйте команду /remove_user", show_alert=True)
+    elif data == "set_role_admin":
+        # Переход к изменению роли
+        await callback.answer("✏️ Изменение роли: используйте команду /set_role", show_alert=True)
+    elif data == "list_users_admin":
+        # Показать список пользователей
+        await callback.answer("📋 Список пользователей: используйте команду /list_users", show_alert=True)
+    elif data == "admin_back_to_main":
+        # Возврат в главное меню админ-панели
+        await AdminPanel.admin_menu(callback.message, state, auth_service, current_user)
+    elif data == "general_stats":
+        await callback.answer("📈 Общая статистика: функция в разработке", show_alert=True)
+    elif data == "user_stats":
+        await callback.answer("📊 Статистика по пользователям: функция в разработке", show_alert=True)
+    elif data == "reports":
+        await callback.answer("📋 Отчеты: функция в разработке", show_alert=True)
+    else:
+        await callback.answer("Неизвестная команда", show_alert=True)
+
+
 def register_admin_handlers(dp: Router):
     """Регистрирует хендлеры административных команд."""
     # Регистрируем команды
@@ -313,3 +464,11 @@ def register_admin_handlers(dp: Router):
     dp.message.register(remove_user_command_handler, Command(commands=["remove_user"]))
     dp.message.register(set_role_command_handler, Command(commands=["set_role"]))
     dp.message.register(list_users_command_handler, Command(commands=["list_users"]))
+    
+    # Регистрируем callback хендлер для FSM
+    dp.callback_query.register(admin_callback_handler, lambda c: c.data in [
+        "manage_users", "view_stats", "admin_settings", "cancel_admin",
+        "add_user_admin", "remove_user_admin", "set_role_admin",
+        "list_users_admin", "admin_back_to_main", "general_stats",
+        "user_stats", "reports"
+    ])

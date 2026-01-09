@@ -26,14 +26,23 @@ class TransactionDraft:
     transaction_dt: Optional[datetime] = None
 
 
-def get_main_keyboard() -> ReplyKeyboardMarkup:
+def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Возвращает основную ReplyKeyboardMarkup."""
+    keyboard = [
+        [KeyboardButton(text="💸 Добавить транзакцию")],
+        [KeyboardButton(text="📜 История транзакций")],
+        [KeyboardButton(text="📊 Отчет")]
+    ]
+    
+    # Добавляем админские команды, если пользователь админ
+    if is_admin:
+        keyboard.insert(-1, [KeyboardButton(text="🛡️ Админ-панель")])  # Добавляем перед последней кнопкой
+    
+    # Добавляем кнопку проверки листов в самый низ
+    keyboard.append([KeyboardButton(text="🧪 Проверить Sheets")])
+    
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="💸 Добавить транзакцию")],
-            [KeyboardButton(text="📜 История транзакций")],
-            [KeyboardButton(text="🧪 Проверить Sheets")]
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
         one_time_keyboard=False
     )
@@ -200,19 +209,40 @@ def get_comment_entry_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_amount_entry_keyboard() -> InlineKeyboardMarkup:
-    """Генерирует Inline-клавиатуру с кнопкой 'Без суммы' для ввода суммы."""
+def get_admin_main_keyboard() -> InlineKeyboardMarkup:
+    """Генерирует Inline-клавиатуру для главного меню админ-панели."""
     keyboard = [
-        [InlineKeyboardButton(text="Без суммы", callback_data="amount_none")]
+        [InlineKeyboardButton(text="👥 Управление пользователями", callback_data="manage_users")],
+        [InlineKeyboardButton(text="📊 Статистика и отчеты", callback_data="view_stats")],
+        [InlineKeyboardButton(text="📈 Настройки", callback_data="admin_settings")],
+        [InlineKeyboardButton(text="❌ Выйти из админ-панели", callback_data="cancel_admin")]
     ]
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_comment_entry_keyboard() -> InlineKeyboardMarkup:
-    """Генерирует Inline-клавиатуру с кнопкой 'Без комментария' для ввода комментария."""
+def get_admin_users_keyboard() -> InlineKeyboardMarkup:
+    """Генерирует Inline-клавиатуру для меню управления пользователями."""
     keyboard = [
-        [InlineKeyboardButton(text="Без комментария", callback_data="comment_none_draft")]
+        [InlineKeyboardButton(text="➕ Добавить пользователя", callback_data="add_user_admin")],
+        [InlineKeyboardButton(text="🗑️ Удалить пользователя", callback_data="remove_user_admin")],
+        [InlineKeyboardButton(text="✏️ Изменить роль", callback_data="set_role_admin")],
+        [InlineKeyboardButton(text="📋 Список пользователей", callback_data="list_users_admin")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back_to_main")],
+        [InlineKeyboardButton(text="❌ Выйти из админ-панели", callback_data="cancel_admin")]
+    ]
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_admin_stats_keyboard() -> InlineKeyboardMarkup:
+    """Генерирует Inline-клавиатуру для меню статистики."""
+    keyboard = [
+        [InlineKeyboardButton(text="📈 Общая статистика", callback_data="general_stats")],
+        [InlineKeyboardButton(text="📊 По пользователям", callback_data="user_stats")],
+        [InlineKeyboardButton(text="📋 Отчеты", callback_data="reports")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back_to_main")],
+        [InlineKeyboardButton(text="❌ Выйти из админ-панели", callback_data="cancel_admin")]
     ]
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

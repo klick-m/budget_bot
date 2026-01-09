@@ -59,6 +59,10 @@ async def start_sync_worker(bot, repository: TransactionRepository, sheets_clien
             # Ждем перед следующей проверкой
             await asyncio.sleep(60)
             
+        except asyncio.CancelledError:
+            # Обработка отмены задачи (например, при завершении бота)
+            logger.info("Sync worker received cancellation signal. Stopping...")
+            break  # Выход из бесконечного цикла
         except Exception as e:
             # Общие ошибки воркера также логируются, но не крашат бота
             logger.error(f"Sync worker error: {e}")

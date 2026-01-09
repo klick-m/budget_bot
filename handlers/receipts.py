@@ -52,7 +52,7 @@ from utils.states import TransactionStates
 # --- D. ХЕНДЛЕР ЧЕКОВ (СЛОЖНЫЙ) ---
 # ----------------------------------------------------------------------
 
-async def handle_photo(message: types.Message, state: FSMContext, data: dict, transaction_service: TransactionService):
+async def handle_photo(message: types.Message, state: FSMContext, transaction_service: TransactionService, current_user: Optional[dict] = None):
     await state.clear()
     
     try:
@@ -103,8 +103,7 @@ async def handle_photo(message: types.Message, state: FSMContext, data: dict, tr
             await edit_or_send(message.bot, status_msg, f"❌ {e}. Введите вручную: /new_transaction")
             return
 
-        # Получаем информацию о пользователе из middleware
-        current_user = data.get('current_user')
+        # Получаем информацию о пользователе из middleware (передается напрямую)
         if not current_user:
             await edit_or_send(message.bot, status_msg, "❌ Ошибка: невозможно получить информацию о пользователе.")
             return
@@ -336,15 +335,14 @@ async def process_cancel_check(callback: types.CallbackQuery, state: FSMContext,
          logger.error(f"Не удалось отправить сообщение об отмене чека: {e}")
 
 
-async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, data: dict, transaction_service: TransactionService):
+async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, transaction_service: TransactionService, current_user: Optional[dict] = None):
     """Подтверждает и записывает транзакцию из чека после выбора категории вручную."""
     await safe_answer(callback)
     
     try:
         data = await state.get_data()
         
-        # Получаем информацию о пользователе из middleware
-        current_user = data.get('current_user')
+        # Получаем информацию о пользователе из middleware (передается напрямую)
         if not current_user:
             await edit_or_send(
                 bot,
@@ -403,15 +401,14 @@ async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext
         await edit_or_send(bot, callback.message, f"❌ **Ошибка:** {e}")
 
 
-async def process_confirm_auto_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, data: dict, transaction_service: TransactionService):
+async def process_confirm_auto_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, transaction_service: TransactionService, current_user: Optional[dict] = None):
     """Подтверждает и записывает автоматически распознанный чек."""
     await safe_answer(callback)
     
     try:
         data = await state.get_data()
         
-        # Получаем информацию о пользователе из middleware
-        current_user = data.get('current_user')
+        # Получаем информацию о пользователе из middleware (передается напрямую)
         if not current_user:
             await edit_or_send(
                 bot,
@@ -648,7 +645,7 @@ async def process_split_category_choice(callback: types.CallbackQuery, state: FS
         await show_splitting_ui(callback, state)
 
 
-async def finalize_split_transactions(callback: types.CallbackQuery, state: FSMContext, data: dict, transaction_service: TransactionService):
+async def finalize_split_transactions(callback: types.CallbackQuery, state: FSMContext, transaction_service: TransactionService, current_user: Optional[dict] = None):
     """Сохраняет все транзакции из сплита."""
     data = await state.get_data()
     session = data.get('split_session')
@@ -675,8 +672,7 @@ async def finalize_split_transactions(callback: types.CallbackQuery, state: FSMC
     
     for group in session['completed_groups']:
         try:
-            # Получаем информацию о пользователе из middleware
-            current_user = data.get('current_user')
+            # Получаем информацию о пользователе из middleware (передается напрямую)
             if not current_user:
                 await edit_or_send(
                     callback.bot,

@@ -19,9 +19,9 @@ def register_all_handlers(dp: Router):
     register_admin_handlers(dp)
 
 # Создаем главный роутер
-dp = Router()
+router = Router()
 
 __all__ = [
-    "dp",  # Главный роутер
+    "router",  # Главный роутер
     "register_all_handlers"
 ]

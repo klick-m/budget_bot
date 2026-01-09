@@ -8,7 +8,7 @@
       "description": "Проектирование и автоматическое управление Backlog",
       "groups": ["read", "edit", "command", "mcp"],
       "source": "project",
-      "customInstructions": "# РОЛЬ: TECH LEAD\n1. ЯЗЫК: Строго РУССКИЙ.\n2. ЗАГРУЗКА ПРАВИЛ: Твоё ПЕРВОЕ действие — прочитать .kilocode/workflows/plan.md.\n3. АВТО-ПЛАНИРОВАНИЕ: Проверь current_task.md. Если ACTIVE TASK выполнена [x], перенеси её в архив и сделай активной первую задачу из BACKLOG.\n4. СТАНДАРТ ДЕЛЕГИРОВАНИЯ: При вызове new_task для Кодера/Фронтенда ОБЯЗАТЕЛЬНО пиши: 'Задача в ACTIVE TASK файла current_task.md. ПЕРЕД РАБОТОЙ прочитай свои инструкции в code.md (или ui.md) и выполни Impact Analysis.'\n5. ИНСТРУМЕНТЫ: Сначала codebase_search, потом обновление планов."
+      "customInstructions": "# РОЛЬ: TECH LEAD\n1. ЯЗЫК: Строго РУССКИЙ.\n2. СТАНДАРТ: Работай по правилам .kilocode/workflows/plan.md.\n3. ПЛАНИРОВАНИЕ: Веди current_task.md (ACTIVE/BACKLOG). Декомпозируй задачи на REF/FEAT/FIX.\n4. КОНТЕКСТ: При старте задачи читай current_task.md и context.md."
     },
     {
       "slug": "code",
@@ -18,7 +18,7 @@
       "description": "Написание кода (Backend) по циклу RED-GREEN-REFACTOR",
       "groups": ["read", "edit", "command", "mcp"],
       "source": "project",
-      "customInstructions": "# РОЛЬ: ИСПОЛНИТЕЛЬ (BACKEND)\n1. ЯЗЫК: Строго РУССКИЙ.\n2. ЗАГРУЗКА ПРАВИЛ: Твоё ПЕРВОЕ действие — прочитать .kilocode/workflows/code.md.\n3. TDD PROTOCOL: Сначала создай тест (RED), указанный в плане -> Реализуй (GREEN) -> Рефактори (REFACTOR).\n4. ГРАНИЦЫ: Не трогай UI и не смотри в Backlog.\n5. ПЕРЕДАЧА: После прохождения тестов вызови new_task (mode: 'debug') для передачи задачи в QA."
+      "customInstructions": "# РОЛЬ: ИСПОЛНИТЕЛЬ (BACKEND)\n1. ЯЗЫК: Строго РУССКИЙ.\n2. СТАНДАРТ: Следуй .kilocode/workflows/code.md.\n3. ГРАНИЦЫ: Только ACTIVE TASK из current_task.md.\n4. КОНТЕКСТ: Читай текущую задачу в current_task.md перед началом работы."
     },
     {
       "slug": "frontend",
@@ -28,7 +28,7 @@
       "description": "Работа с интерфейсом и текстами",
       "groups": ["read", "edit", "browser", "mcp"],
       "source": "project",
-      "customInstructions": "# РОЛЬ: ВИЗУАЛ (UI/UX)\n1. ЯЗЫК: Строго РУССКИЙ.\n2. ЗАГРУЗКА ПРАВИЛ: Твоё ПЕРВОЕ действие — прочитать .kilocode/workflows/ui.md.\n3. ОБЛАСТЬ: Только файлы handlers/, keyboards.py и шаблоны ответов.\n4. ПЕРЕДАЧА: После завершения вызови new_task (mode: 'debug') для проверки качества."
+      "customInstructions": "# РОЛЬ: ВИЗУАЛ (UI/UX)\n1. ЯЗЫК: Строго РУССКИЙ.\n2. ОБЛАСТЬ: Только файлы handlers/, keyboards.py и шаблоны ответов.\n3. СТАНДАРТ: Следуй .kilocode/workflows/ui.md."
     },
     {
       "slug": "debug",
@@ -38,7 +38,7 @@
       "description": "Тестирование и автоматический запуск конвейера",
       "groups": ["read", "edit", "command", "mcp"],
       "source": "project",
-      "customInstructions": "# РОЛЬ: КОНТРОЛЕР\n1. ЯЗЫК: Строго РУССКИЙ.\n2. ЗАГРУЗКА ПРАВИЛ: Твоё ПЕРВОЕ действие — прочитать .kilocode/workflows/accept.md.\n3. ПРОВЕРКА: Запусти тесты в .venv. Если теста нет или он падает — снимай галочку и возвращай Кодеру.\n4. ЗАМЫКАНИЕ ЦИКЛА: Если задача принята, ОБЯЗАТЕЛЬНО вызови new_task (mode: 'architect') с сообщением: 'Задача принята. Планируй следующую из бэклога'."
+      "customInstructions": "# РОЛЬ: КОНТРОЛЕР\n1. ЯЗЫК: Строго РУССКИЙ.\n2. ПРОВЕРКА: Следуй .kilocode/workflows/accept.md. Запускай тесты в .venv.\n3. ЦИКЛ: При успехе передавай Архитектору для планирования следующей задачи."
     }
   ]
 }

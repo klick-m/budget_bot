@@ -21,7 +21,13 @@ from utils.keyboards import get_main_keyboard, get_history_keyboard, HistoryCall
 from sheets.client import get_latest_transactions
 from services.repository import TransactionRepository
 from services.transaction_service import TransactionService
-from services.analytics_service import AnalyticsService
+try:
+    from services.analytics_service import AnalyticsService
+except ImportError:
+    # Если не удается импортировать AnalyticsService из-за отсутствия matplotlib, создаем заглушку
+    class AnalyticsService:
+        def __init__(self, repository):
+            self.repository = repository
 from utils.messages import MSG
 from aiogram.filters import Command, or_f
 
@@ -34,20 +40,15 @@ from aiogram.filters import Command, or_f
 # --- C. ХЕНДЛЕРЫ КОМАНД И ОСНОВНЫЕ ФУНКЦИИ ---
 # ----------------------------------------------------------------------
 
-async def command_start_handler(message: types.Message, state: FSMContext):
+async def command_start_handler(message: types.Message, state: FSMContext, current_user: Optional[dict] = None):
     # 1. Clean previous UI
     await clean_previous_kb(message.bot, state, message.chat.id)
     
+    # Получаем информацию о пользователе из middleware (передается напрямую)
+    is_admin = current_user and current_user.get('role') == 'admin'
+    
     # Создаем Reply-клавиатуру с командами
-    keyboard = types.ReplyKeyboardMarkup(
-        keyboard=[
-            [types.KeyboardButton(text="💸 Добавить транзакцию")],
-            [types.KeyboardButton(text="📜 История транзакций")],
-            [types.KeyboardButton(text="🧪 Проверить Sheets")]
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=False
-    )
+    keyboard = get_main_keyboard(is_admin=is_admin)
     
     await message.answer(
         f"Привет, **{message.from_user.full_name}**! 👋\n"
@@ -57,11 +58,10 @@ async def command_start_handler(message: types.Message, state: FSMContext):
     )
 
 
-async def test_sheets_handler(message: types.Message, data: dict, transaction_service: TransactionService):
+async def test_sheets_handler(message: types.Message, transaction_service: TransactionService, current_user: Optional[dict] = None):
     status_msg = await message.answer(MSG.test_transaction_start)
 
     # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
     if not current_user:
         await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
         return
@@ -81,7 +81,7 @@ async def test_sheets_handler(message: types.Message, data: dict, transaction_se
     # if service is None check removed as DI ensures it
 
     # if service is None check removed as DI ensures it
- 
+
     try:
         result = await service.finalize_transaction(test_data)
         await edit_or_send(
@@ -110,10 +110,9 @@ async def test_sheets_handler(message: types.Message, data: dict, transaction_se
 # ----------------------------------------------------------------------
 
 
-async def undo_command_handler(message: types.Message, data: dict):
+async def undo_command_handler(message: types.Message, current_user: Optional[dict] = None):
     """Обработчик команды /undo для удаления последних транзакций."""
     # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
     if not current_user:
         await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
         return
@@ -172,7 +171,7 @@ def create_undo_keyboard(transactions: list) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-async def undo_callback_handler(callback: types.CallbackQuery, data: dict, transaction_service: TransactionService):
+async def undo_callback_handler(callback: types.CallbackQuery, transaction_service: TransactionService, current_user: Optional[dict] = None):
     """Обработчик нажатия кнопок удаления транзакций."""
     await safe_answer(callback)  # Безопасно отвечаем на callback
     
@@ -202,7 +201,6 @@ async def undo_callback_handler(callback: types.CallbackQuery, data: dict, trans
         # Check removed
 
         # Получаем информацию о пользователе из middleware
-        current_user = data.get('current_user')
         if not current_user:
             await callback.message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
             return
@@ -268,10 +266,9 @@ async def close_undo_handler(callback: types.CallbackQuery):
 # --- КОМАНДА ИСТОРИИ ТРАНЗАКЦИЙ ---
 # ----------------------------------------------------------------------
 
-async def history_command_handler(message: types.Message, data: dict):
+async def history_command_handler(message: types.Message, current_user: Optional[dict] = None):
     """Обработчик команды /history для просмотра последних транзакций."""
     # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
     if not current_user:
         await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
         return
@@ -310,7 +307,7 @@ async def history_command_handler(message: types.Message, data: dict):
     await message.answer(history_text, reply_markup=keyboard, parse_mode="Markdown")
 
 
-async def history_callback_handler(callback: types.CallbackQuery, callback_data: HistoryCallbackData, data: dict):
+async def history_callback_handler(callback: types.CallbackQuery, callback_data: HistoryCallbackData, current_user: Optional[dict] = None):
     """Обработчик кнопок пагинации истории транзакций."""
     await safe_answer(callback)  # Безопасно отвечаем на callback
     
@@ -318,7 +315,6 @@ async def history_callback_handler(callback: types.CallbackQuery, callback_data:
     direction = callback_data.direction
     
     # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
     if not current_user:
         try:
             await edit_or_send(
@@ -418,10 +414,9 @@ async def close_history_handler(callback: types.CallbackQuery):
 # ----------------------------------------------------------------------
 
 
-async def report_command_handler(message: types.Message, data: dict, analytics_service: AnalyticsService):
+async def report_command_handler(message: types.Message, analytics_service: AnalyticsService, current_user: Optional[dict] = None):
     """Обработчик команды /report для генерации и отправки графика расходов."""
     # Получаем информацию о пользователе из middleware
-    current_user = data.get('current_user')
     if not current_user:
         await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
         return
@@ -476,3 +471,8 @@ def register_common_handlers(dp: Router):
     
     # Регистрируем команду отчета
     dp.message.register(report_command_handler, or_f(Command(commands=["report"]), F.text == "📊 Отчет"))
+    
+    # Регистрируем команду админ-панели
+    # Импортируем хендлер из admin.py для регистрации
+    from handlers.admin import admin_command_handler
+    dp.message.register(admin_command_handler, or_f(Command(commands=["admin"]), F.text == "🛡️ Админ-панель"))

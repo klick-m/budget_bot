@@ -1,1 +1,1 @@
-{"mcpServers":{"context7":{"command":"npx.cmd","args":["-y","@upstash/context7-mcp"],"env":{"CONTEXT7_API_KEY":"ctx7sk-3f59bf78-7220-4128-996e-fe0d84e7ddcd"},"disabled":false,"alwaysAllow":["get-library-docs","resolve-library-id",""]}}}
+{"mcpServers":{"context7":{"command":"npx.cmd","args":["-y","@upstash/context7-mcp"],"env":{"CONTEXT7_API_KEY":"ctx7sk-3f59bf78-7220-4128-996e-fe0d84e7ddcd"},"disabled":false,"alwaysAllow":["get-library-docs","resolve-library-id","","query-docs"]}}}
