@@ -73,7 +73,7 @@ async def process_smart_input(message: types.Message, state: FSMContext, transac
         amount=parsed_data['amount'],
         comment=parsed_data['comment'],
         username=message.from_user.username or message.from_user.full_name,
-        user_id=current_user['telegram_id'],  # Используем ID из middleware
+        user_id=current_user.telegram_id,  # Используем ID из middleware
         retailer_name="",
         items_list="",
         payment_info="",

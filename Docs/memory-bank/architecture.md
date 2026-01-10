@@ -13,6 +13,8 @@
 - **Dependency Injection**: Все сервисы внедряются в диспетчер через `dp.workflow_data` и передаются в хендлеры через аннотации типов.
 - **Local-First**: Транзакция считается успешной сразу после записи в SQLite. Синхронизация с облаком выполняется фоновым процессом `SyncWorker`.
 - **Auth Middleware**: Проверка прав пользователя и инъекция объекта `current_user` происходит на уровне Middleware до попадания в хендлеры. AuthMiddleware интегрирована с UserRepository для проверки наличия пользователя в системе и его роли.
+- **Repository Inheritance**: TransactionRepository наследуется от UserRepository, обеспечивая доступ ко всем методам управления пользователями и гарантируя создание обеих таблиц (users и transactions) при инициализации базы данных.
+- **User Object Model**: Middleware теперь передает объект User (Pydantic модель) вместо словаря, что улучшает типизацию и предотвращает ошибки доступа к атрибутам.
 
 ## Data Flow
 1. **Input**: Telegram Message -> Middleware (Auth) -> Handler.

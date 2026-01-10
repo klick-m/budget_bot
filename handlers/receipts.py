@@ -110,7 +110,7 @@ async def handle_photo(message: types.Message, state: FSMContext, transaction_se
 
         # 3. Обработка данных чека через TransactionService
         try:
-            transaction = await service.process_check_data(parsed_data, message.from_user.username or message.from_user.full_name, current_user['telegram_id'])  # Используем ID из middleware
+            transaction = await service.process_check_data(parsed_data, message.from_user.username or message.from_user.full_name, current_user.telegram_id)  # Используем ID из middleware
         except Exception as e:
             await edit_or_send(message.bot, status_msg, f"❌ Ошибка обработки данных чека: {e}")
             return
@@ -147,7 +147,7 @@ async def handle_photo(message: types.Message, state: FSMContext, transaction_se
             amount=parsed_data.amount,
             comment=parsed_data.comment,
             username=message.from_user.username or message.from_user.full_name,
-            user_id=current_user['telegram_id'],  # Используем ID из middleware
+            user_id=current_user.telegram_id,  # Используем ID из middleware
             retailer_name=parsed_data.retailer_name,
             items_list=parsed_data.items_list,
             payment_info=parsed_data.payment_info,
@@ -359,7 +359,7 @@ async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext
             amount=data['amount'],
             comment=data.get('comment', '').replace('|', '\n• '),
             username=callback.from_user.username or callback.from_user.full_name,
-            user_id=current_user['telegram_id'],  # Используем ID из middleware
+            user_id=current_user.telegram_id,  # Используем ID из middleware
             retailer_name=data.get('retailer_name', ''),
             items_list=data.get('items_list', ''),
             payment_info=data.get('payment_info', ''),
@@ -425,7 +425,7 @@ async def process_confirm_auto_check(callback: types.CallbackQuery, state: FSMCo
             amount=data['amount'],
             comment=data.get('comment', '').replace('|', '\n• '),
             username=callback.from_user.username or callback.from_user.full_name,
-            user_id=current_user['telegram_id'],  # Используем ID из middleware
+            user_id=current_user.telegram_id,  # Используем ID из middleware
             retailer_name=data.get('retailer_name', ''),
             items_list=data.get('items_list', ''),
             payment_info=data.get('payment_info', ''),
@@ -689,7 +689,7 @@ async def finalize_split_transactions(callback: types.CallbackQuery, state: FSMC
                 amount=group['amount'],
                 comment=group['items_str'][:100], # Ограничим длину комментария
                 username=callback.from_user.username or callback.from_user.full_name,
-                user_id=current_user['telegram_id'],  # Используем ID из middleware
+                user_id=current_user.telegram_id,  # Используем ID из middleware
                 retailer_name=check_base.retailer_name,
                 items_list=group['items_str'],
                 payment_info=check_base.payment_info,

@@ -165,13 +165,16 @@ class UserRepository:
         pass  # В текущей реализации aiosqlite использует контекстные менеджеры, поэтому отдельное закрытие не требуется
 
 
-class TransactionRepository:
+class TransactionRepository(UserRepository):
     def __init__(self, db_path: str = "transactions.db"):
-        self.db_path = db_path
+        super().__init__(db_path)
         self._connection = None
 
     async def init_db(self):
         """Initialize the database and create the transactions table if it doesn't exist."""
+        # Сначала инициализируем родительскую базу данных (таблицу users)
+        await super().init_db()
+        
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute("PRAGMA synchronous=NORMAL;")

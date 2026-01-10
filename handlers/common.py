@@ -45,7 +45,7 @@ async def command_start_handler(message: types.Message, state: FSMContext, curre
     await clean_previous_kb(message.bot, state, message.chat.id)
     
     # Получаем информацию о пользователе из middleware (передается напрямую)
-    is_admin = current_user and current_user.get('role') == 'admin'
+    is_admin = current_user and current_user.role == 'admin'
     
     # Создаем Reply-клавиатуру с командами
     keyboard = get_main_keyboard(is_admin=is_admin)
@@ -72,7 +72,7 @@ async def test_sheets_handler(message: types.Message, transaction_service: Trans
         amount=1.00,
         comment='Проверка связи с ботом',
         username=message.from_user.username or message.from_user.full_name,
-        user_id=current_user['telegram_id'],  # Используем ID из middleware
+        user_id=current_user.telegram_id,  # Используем ID из middleware
         transaction_dt=datetime.now()
     )
     
@@ -118,7 +118,7 @@ async def undo_command_handler(message: types.Message, current_user: Optional[di
         return
     
     # Получаем последние 3 транзакции
-    user_id = str(current_user['telegram_id'])  # Используем ID из middleware
+    user_id = str(current_user.telegram_id)  # Используем ID из middleware
     transactions = await get_latest_transactions(user_id=user_id, limit=3, offset=0)
     
     if not transactions:
@@ -207,7 +207,7 @@ async def undo_callback_handler(callback: types.CallbackQuery, transaction_servi
 
         # Удаляем транзакцию через сервис
         result = await service.delete_transaction_by_details(
-            user_id=str(current_user['telegram_id']),  # Используем ID из middleware
+            user_id=str(current_user.telegram_id),  # Используем ID из middleware
             date=transaction_date,
             time=transaction_time,
             amount=float(transaction_amount)
@@ -274,7 +274,7 @@ async def history_command_handler(message: types.Message, current_user: Optional
         return
     
     # Получаем последние 5 транзакций с нулевым смещением
-    user_id = current_user.get('username') or str(current_user['telegram_id'])  # Используем данные из middleware
+    user_id = current_user.username or str(current_user.telegram_id)  # Используем данные из middleware
     transactions = await get_latest_transactions(user_id=user_id, limit=5, offset=0)
     
     if not transactions:
@@ -328,7 +328,7 @@ async def history_callback_handler(callback: types.CallbackQuery, callback_data:
         return
 
     # Получаем транзакции с новым смещением
-    user_id = current_user.get('username') or str(current_user['telegram_id'])  # Используем данные из middleware
+    user_id = current_user.username or str(current_user.telegram_id)  # Используем данные из middleware
     transactions = await get_latest_transactions(user_id=user_id, limit=5, offset=offset)
     
     if not transactions:
@@ -421,7 +421,7 @@ async def report_command_handler(message: types.Message, analytics_service: Anal
         await message.answer("❌ Ошибка: невозможно получить информацию о пользователе.")
         return
     
-    user_id = current_user['telegram_id']
+    user_id = current_user.telegram_id
     
     try:
         # Показываем статус пользователю

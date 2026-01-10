@@ -47,7 +47,7 @@ async def main():
     dp.message.middleware(auth_middleware)
     dp.callback_query.middleware(auth_middleware)
     # Создаем AuthService
-    auth_service = AuthService(repo=transaction_repository)
+    auth_service = AuthService(user_repo=transaction_repository)
     
     # Внедрение зависимостей
     analytics_service = AnalyticsService(repository=transaction_repository)

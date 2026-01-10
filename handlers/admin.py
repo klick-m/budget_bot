@@ -4,32 +4,41 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from typing import Dict, Any, Optional
 from services.auth_service import AuthService
+from models.user import User
 from utils.messages import MSG
 from utils.keyboards import get_admin_main_keyboard, get_admin_users_keyboard, get_admin_stats_keyboard
 from utils.states import AdminStates
 import re
 
 
-def is_admin(current_user: Dict[str, Any]) -> bool:
+def is_admin(current_user: Optional[User]) -> bool:
     """
     Проверяет, является ли пользователь администратором.
     
     Args:
-        current_user: Словарь с информацией о пользователе из middleware
+        current_user: Объект пользователя из middleware
         
     Returns:
         bool: True, если пользователь администратор, иначе False
     """
-    if not current_user or not isinstance(current_user, dict):
+    if not current_user:
         return False
-    return current_user.get('role', 'user') == 'admin'
+    # Проверяем, является ли current_user объектом User (новая версия) или словарем (устаревшая версия)
+    if hasattr(current_user, 'role'):
+        # Это объект User
+        return current_user.role == 'admin'
+    elif isinstance(current_user, dict) and 'role' in current_user:
+        # Это словарь
+        return current_user.get('role', 'user') == 'admin'
+    else:
+        return False
 
 
 class AdminPanel:
     """Класс для обработки интерактивной админ-панели с FSM"""
     
     @staticmethod
-    async def admin_menu(message: types.Message, state: FSMContext, auth_service: AuthService, current_user: Optional[dict] = None):
+    async def admin_menu(message: types.Message, state: FSMContext, auth_service: AuthService, current_user: Optional[User] = None):
         """
         Обработчик команды /admin для открытия интерактивной панели администратора.
         
@@ -37,7 +46,7 @@ class AdminPanel:
             message: Объект сообщения от пользователя
             state: FSM контекст
             auth_service: Сервис аутентификации для проверки прав
-            current_user: Словарь с информацией о пользователе из middleware
+            current_user: Объект пользователя из middleware
         """
         # Проверяем права администратора
         if not is_admin(current_user):
@@ -130,14 +139,14 @@ class AdminPanel:
         await callback.answer()
 
 
-async def admin_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
+async def admin_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[User] = None):
     """
     Обработчик команды /admin для открытия панели администратора.
     
     Args:
         message: Объект сообщения от пользователя
         auth_service: Сервис аутентификации для работы с пользователями
-        current_user: Словарь с информацией о пользователе из middleware
+        current_user: Объект пользователя из middleware
     """
     # Проверяем права администратора
     if not is_admin(current_user):
@@ -168,14 +177,14 @@ async def admin_command_handler(message: types.Message, auth_service: AuthServic
     await message.answer("👆 Выберите действие:", reply_markup=keyboard)
 
 
-async def add_user_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
+async def add_user_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[User] = None):
     """
     Обработчик команды /add_user для добавления нового пользователя.
     
     Args:
         message: Объект сообщения от пользователя
         auth_service: Сервис аутентификации для работы с пользователями
-        current_user: Словарь с информацией о пользователе из middleware
+        current_user: Объект пользователя из middleware
     """
     # Проверяем права администратора
     if not is_admin(current_user):
@@ -239,14 +248,14 @@ async def add_user_command_handler(message: types.Message, auth_service: AuthSer
         )
 
 
-async def remove_user_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
+async def remove_user_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[User] = None):
     """
     Обработчик команды /remove_user для удаления пользователя.
     
     Args:
         message: Объект сообщения от пользователя
         auth_service: Сервис аутентификации для работы с пользователями
-        current_user: Словарь с информацией о пользователе из middleware
+        current_user: Объект пользователя из middleware
     """
     # Проверяем права администратора
     if not is_admin(current_user):
@@ -295,14 +304,14 @@ async def remove_user_command_handler(message: types.Message, auth_service: Auth
         )
 
 
-async def set_role_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
+async def set_role_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[User] = None):
     """
     Обработчик команды /set_role для изменения роли пользователя.
     
     Args:
         message: Объект сообщения от пользователя
         auth_service: Сервис аутентификации для работы с пользователями
-        current_user: Словарь с информацией о пользователе из middleware
+        current_user: Объект пользователя из middleware
     """
     # Проверяем права администратора
     if not is_admin(current_user):
@@ -361,14 +370,14 @@ async def set_role_command_handler(message: types.Message, auth_service: AuthSer
         )
 
 
-async def list_users_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[dict] = None):
+async def list_users_command_handler(message: types.Message, auth_service: AuthService, current_user: Optional[User] = None):
     """
     Обработчик команды /list_users для получения списка всех пользователей.
     
     Args:
         message: Объект сообщения от пользователя
         auth_service: Сервис аутентификации для работы с пользователями
-        current_user: Словарь с информацией о пользователе из middleware
+        current_user: Объект пользователя из middleware
     """
     # Проверяем права администратора
     if not is_admin(current_user):
@@ -404,7 +413,7 @@ async def list_users_command_handler(message: types.Message, auth_service: AuthS
 
 
 # FSM обработчики для интерактивной админ-панели
-async def admin_callback_handler(callback: types.CallbackQuery, state: FSMContext, auth_service: AuthService, current_user: Optional[dict] = None):
+async def admin_callback_handler(callback: types.CallbackQuery, state: FSMContext, auth_service: AuthService, current_user: Optional[User] = None):
     """
     Обработчик callback'ов для интерактивной админ-панели.
     
@@ -412,7 +421,7 @@ async def admin_callback_handler(callback: types.CallbackQuery, state: FSMContex
         callback: Объект callback запроса
         state: FSM контекст
         auth_service: Сервис аутентификации для проверки прав
-        current_user: Словарь с информацией о пользователе из middleware
+        current_user: Объект пользователя из middleware
     """
     # Проверяем права администратора
     if not is_admin(current_user):

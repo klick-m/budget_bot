@@ -222,7 +222,7 @@ async def process_comment_input(message: types.Message, state: FSMContext, curre
         amount=data['amount'],
         comment=comment,
         username=message.from_user.username or message.from_user.full_name,
-        user_id=current_user['telegram_id'],  # Используем ID из middleware
+        user_id=current_user.telegram_id,  # Используем ID из middleware
         retailer_name="",
         items_list="",
         payment_info="",
@@ -478,7 +478,7 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transa
             amount=data['amount'],
             comment=data.get('comment', ''),
             username=callback.from_user.username or callback.from_user.full_name,
-            user_id=current_user['telegram_id'],  # Используем ID из middleware
+            user_id=current_user.telegram_id,  # Используем ID из middleware
             retailer_name=data.get('retailer_name', ''),
             items_list=data.get('items_list', ''),
             payment_info=data.get('payment_info', ''),
