@@ -21,8 +21,7 @@ class UserRepository:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     telegram_id INTEGER UNIQUE NOT NULL,
                     username TEXT,
-                    role TEXT DEFAULT 'user',
-                    monthly_limit REAL DEFAULT 0
+                    role TEXT DEFAULT 'user'
                 )
                 """
             )
@@ -39,7 +38,7 @@ class UserRepository:
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """
-                SELECT id, telegram_id, username, role, monthly_limit
+                SELECT id, telegram_id, username, role
                 FROM users
                 WHERE id = ?
                 """,
@@ -57,15 +56,14 @@ class UserRepository:
         telegram_id = user_data['telegram_id']
         username = user_data.get('username')
         role = user_data.get('role', 'user')
-        monthly_limit = user_data.get('monthly_limit', 0.0)
 
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """
-                INSERT INTO users (telegram_id, username, role, monthly_limit)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO users (telegram_id, username, role)
+                VALUES (?, ?, ?)
                 """,
-                (telegram_id, username, role, monthly_limit)
+                (telegram_id, username, role)
             )
             user_id = cursor.lastrowid
             await db.commit()
@@ -74,8 +72,7 @@ class UserRepository:
             id=user_id,
             telegram_id=telegram_id,
             username=username,
-            role=role,
-            monthly_limit=monthly_limit
+            role=role
         )
 
     async def update_user_fields(self, user_id: int, fields: dict) -> bool:
@@ -111,7 +108,7 @@ class UserRepository:
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """
-                SELECT id, telegram_id, username, role, monthly_limit
+                SELECT id, telegram_id, username, role
                 FROM users
                 ORDER BY id
                 """
@@ -126,7 +123,7 @@ class UserRepository:
         async with self._get_connection() as db:
             cursor = await db.execute(
                 """
-                SELECT id, telegram_id, username, role, monthly_limit
+                SELECT id, telegram_id, username, role
                 FROM users
                 WHERE telegram_id = ?
                 """,
@@ -140,7 +137,7 @@ class UserRepository:
             return None
 
     async def update_user_profile(self, user_id: int, username: Optional[str] = None,
-                                role: Optional[str] = None, monthly_limit: Optional[float] = None) -> bool:
+                                role: Optional[str] = None) -> bool:
         """Update user profile (multiple fields at once)"""
         user = await self.get_user_by_id(user_id)
         if not user:
@@ -152,8 +149,6 @@ class UserRepository:
             fields['username'] = username
         if role is not None:
             fields['role'] = role
-        if monthly_limit is not None:
-            fields['monthly_limit'] = monthly_limit
 
         if not fields:
             return False

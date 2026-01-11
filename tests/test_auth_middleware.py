@@ -50,8 +50,7 @@ class TestAuthMiddleware:
             'id': 1,
             'telegram_id': 123456789,
             'username': 'testuser',
-            'role': 'user',
-            'monthly_limit': 1000
+            'role': 'user'
         }
         
         # Заглушка для handler
@@ -85,8 +84,7 @@ class TestAuthMiddleware:
             'id': 1,
             'telegram_id': 123456789,
             'username': 'testuser',
-            'role': 'user',
-            'monthly_limit': 10000
+            'role': 'user'
         }
         
         # Заглушка для handler

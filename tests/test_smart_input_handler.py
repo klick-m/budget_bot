@@ -40,8 +40,7 @@ async def test_process_smart_input_success():
             "id": 1,
             "telegram_id": 123456789,
             "username": "testuser",
-            "role": "user",
-            "monthly_limit": 1000
+            "role": "user"
         },
         "transaction_service": mock_service
     }
@@ -87,8 +86,7 @@ async def test_process_smart_input_invalid_format():
             "id": 1,
             "telegram_id": 123456789,
             "username": "testuser",
-            "role": "user",
-            "monthly_limit": 1000
+            "role": "user"
         },
         "transaction_service": mock_service
     }

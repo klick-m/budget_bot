@@ -98,245 +98,50 @@ async def handle_photo(message: types.Message, state: FSMContext, transaction_se
             parsed_data: CheckData = await service.create_transaction_from_check(image_bytes)
         except (CheckApiTimeout, CheckApiRecognitionError) as e:
             await edit_or_send(message.bot, status_msg, f"❌ {MSG.receipt_processing_failed} {e}\nПопробуйте ввести вручную: /new_transaction")
-            return
-        except ValueError as e:
-            await edit_or_send(message.bot, status_msg, f"❌ {e}. Введите вручную: /new_transaction")
-            return
 
-        # Получаем информацию о пользователе из middleware (передается напрямую)
-        if not current_user:
-            await edit_or_send(message.bot, status_msg, "❌ Ошибка: невозможно получить информацию о пользователе.")
-            return
+        # 3. Обработка результата
+        if parsed_data:
+            # Сохраняем данные в FSM
+            await state.update_data(
+                type='Расход',
+                category=parsed_data.predicted_category,
+                amount=parsed_data.amount,
+                retailer_name=parsed_data.retailer_name,
+                items_list=parsed_data.items_str,
+                payment_info=parsed_data.payment_info,
+                transaction_dt=parsed_data.transaction_datetime
+            )
 
-        # 3. Обработка данных чека через TransactionService
-        try:
-            transaction = await service.process_check_data(parsed_data, message.from_user.username or message.from_user.full_name, current_user.telegram_id)  # Используем ID из middleware
-        except Exception as e:
-            await edit_or_send(message.bot, status_msg, f"❌ Ошибка обработки данных чека: {e}")
-            return
-
-        # Сохранение данных в FSM
-        # Преобразуем Pydantic-модель в словарь для FSM
-        fsm_data = parsed_data.model_dump()
-        # Добавляем объект datetime для дальнейшей записи
-        fsm_data['transaction_dt'] = parsed_data.transaction_datetime
-        await state.update_data(**fsm_data)
-        
-        # --- Форматирование предпросмотра ---
-        items_list = parsed_data.items_list
-        items_parts = [item.strip() for item in items_list.split('|') if item.strip()]
-        preview_limit = 5
-        if len(items_parts) > preview_limit:
-            preview_items = "\n".join([f"• {item}" for item in items_parts[:preview_limit]])
-            other_items_count = len(items_parts) - preview_limit
-            items_preview = (f"**Первые {preview_limit} позиций:**\n{preview_items}\n"
-                             f"*(+ {other_items_count} других позиций.)*")
+            # Показываем результат пользователю
+            msg_text = (
+                f"🔍 **Чек распознан, но категория не определена!**\n\n"
+                f"Сумма: **{parsed_data.amount}** руб.\n"
+                f"Дата: {parsed_data.transaction_datetime.strftime('%d.%m.%Y %H:%M') if parsed_data.transaction_datetime else 'Не указана'}\n"
+                f"Продавец: *{parsed_data.retailer_name}*\n\n"
+                
+                f"**Позиции в чеке:**\n• {parsed_data.items_str}\n\n"
+                
+                f"⚠️ **Внимание:** Выберите категорию, чтобы бот **запомнил** продавца и товары для будущих чеков."
+            )
+            
+            from utils.keyboards import get_categories_keyboard
+            keyboard = get_categories_keyboard(CATEGORY_STORAGE.expense)
+            
+            await edit_or_send(message.bot, status_msg, msg_text, reply_markup=keyboard, parse_mode="Markdown")
+            await state.set_state(TransactionStates.choosing_category)
         else:
-            items_preview = "**Позиции:**\n" + "\n".join([f"• {item}" for item in items_parts])
-            
-        check_date_preview = f"Дата операции: **{parsed_data.transaction_datetime.strftime('%d.%m.%Y %H:%M')}**\n"
-        fallback_category = CATEGORY_STORAGE.expense[-1] if CATEGORY_STORAGE.expense else "Прочее Расход"
-        # -----------------------------------
+            await edit_or_send(message.bot, status_msg, MSG.receipt_parse_error)
 
-        # Используем обработанную транзакцию
-        predicted_category = transaction.category
-        # Используем уверенность из обработки, но для этого нужно получить её из сервиса
-        temp_transaction = TransactionData(
-            type=parsed_data.type,
-            category=parsed_data.category,
-            amount=parsed_data.amount,
-            comment=parsed_data.comment,
-            username=message.from_user.username or message.from_user.full_name,
-            user_id=current_user.telegram_id,  # Используем ID из middleware
-            retailer_name=parsed_data.retailer_name,
-            items_list=parsed_data.items_list,
-            payment_info=parsed_data.payment_info,
-            transaction_dt=parsed_data.transaction_datetime
-        )
-        
-        # Получаем уверенность из классификатора
-        _, confidence = service.classifier.predict_category(temp_transaction)
-        
-        # Вместо предложения новой категории, используем только существующие категории
-        if parsed_data.category == fallback_category or confidence < 0.5:
-            
-            # --- ЛОГИКА 1: КАТЕГОРИЯ НЕ ОПРЕДЕЛЕНА, ЗАПРАШИВАЕМ РУЧНОЙ ВВОД (С ОБУЧЕНИЕМ) ---
-            await state.set_state(TransactionStates.choosing_category_after_check)
-            
-            buttons = [
-                types.InlineKeyboardButton(text=cat, callback_data=f"checkcat_{cat}")
-                for cat in CATEGORY_STORAGE.expense
-            ]
-            
-            keyboard = types.InlineKeyboardMarkup(
-                inline_keyboard=[buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-            )
-            
-            summary = (f"🔍 **Чек распознан, но категория не определена!**\n\n"
-                       f"Сумма: **{parsed_data.amount}** руб.\n"
-                       f"{check_date_preview}"
-                       f"Продавец: *{parsed_data.retailer_name}*\n\n"
-                       f"{items_preview}\n\n"
-                       f"⚠️ **Внимание:** Выберите категорию, чтобы бот **запомнил** продавца и товары для будущих чеков.")
-                      
-            await edit_or_send(message.bot, status_msg, summary, reply_markup=keyboard, parse_mode="Markdown")
-
-        else:
-            # --- ЛОГИКА 2: КАТЕГОРИЯ ОПРЕДЕЛЕНА ---
-            # Обновляем категорию на основе предсказания улучшенного классификатора
-            if confidence > 0.7:  # Если уверенность высока, используем предсказание
-                parsed_data.category = predicted_category
-            
-            await state.set_state(TransactionStates.confirming_auto_check)
-
-            keyboard = types.InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        types.InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_auto_check"),
-                        types.InlineKeyboardButton(text="✏️ Изм. Категорию", callback_data="change_category")
-                    ],
-                    [
-                        types.InlineKeyboardButton(text="✂️ Разделить чек", callback_data="split_check"),
-                        types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_check")
-                    ]
-                ]
-            )
-            
-            summary = (f"🧾 **Чек успешно распознан**\n\n"
-                       f"Сумма: **{parsed_data.amount}** руб.\n"
-                       f"{check_date_preview}"
-                       f"Продавец: *{parsed_data.retailer_name}*\n"
-                       f"Категория: **{predicted_category}** (_{confidence:.0%}_)\n\n"
-                       f"{items_preview}")
-            
-            await edit_or_send(message.bot, status_msg, summary, reply_markup=keyboard, parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Неожиданная ошибка в handle_photo: {e}")
+        logger.error(f"Ошибка при обработке фото: {e}")
         try:
-            await message.answer(f"❌ **Критическая ошибка при обработке чека:** {e}")
-        except Exception:
-            # Если даже ответить не получилось, просто логируем
-            logger.error(f"Не удалось отправить сообщение об ошибке в handle_photo: {e}")
-
-
-# --- E. ХЕНДЛЕРЫ FSM (Ввод данных) ---
-# ----------------------------------------------------------------------
-
-async def process_category_choice_after_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-    
-    await safe_answer(callback) # <--- ИСПОЛЬЗУЕМ ОБЕРТКУ safe_answer
-    
-    try:
-        new_category = callback.data.split('_')[1]
-        data = await state.get_data()
-        
-        # Сохраняем новую категорию и переходим в состояние подтверждения
-        await state.update_data(category=new_category)
-        await state.set_state(TransactionStates.confirming_check)
-        
-        # Показываем сводку и кнопки подтверждения/отмены БЕЗ добавления ключевых слов
-        default_comment_preview = data['comment'].replace('|', '\n• ')
-        transaction_dt_str = data.get('transaction_dt').strftime('%d.%m.%Y %H:%M') if data.get('transaction_dt') else 'сейчас'
-        
-        summary = (f"🔍 **Чек распознан и категоризирован!**\n\n"
-                   f"Тип: **{data.get('type', 'Расход')}**\n"
-                   f"Категория: **{new_category}** (вручную выбрана)\n"
-                   f"Сумма: **{data['amount']}** руб.\n"
-                   f"Дата: **{transaction_dt_str}**\n"
-                   f"Продавец: *{data.get('retailer_name', 'Неизвестный')}*\n\n"
-                   f"**Позиции в чеке:**\n• {default_comment_preview}\n\n"
-                   f"✅ Готово к записи?")
-        
-        # Кнопки для подтверждения
-        keyboard = types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_check"),
-                    types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_check")
-                ],
-                [
-                    types.InlineKeyboardButton(text="✂️ Разделить чек", callback_data="split_check")
-                ]
-            ]
-        )
-        
-        await edit_or_send(
-            bot,
-            callback.message,
-            summary,
-            parse_mode="Markdown",
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        logger.error(f"Ошибка в process_category_choice_after_check: {e}")
-        try:
-            await edit_or_send(
-                bot,
-                callback.message,
-                f"❌ **Ошибка при выборе категории:** {e}",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            logger.error(f"Не удалось отправить сообщение об ошибке в process_category_choice_after_check: {e}")
-
-
-async def process_edit_category(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-    """Переводит пользователя в режим выбора категории для авто-распознанного чека."""
-    
-    await safe_answer(callback)
-    
-    try:
-        data = await state.get_data()
-        transaction_type = data.get('type', 'Расход')
-        category_list = CATEGORY_STORAGE.expense if transaction_type == "Расход" else CATEGORY_STORAGE.income
-        
-        # Переходим в состояние выбора категории
-        await state.set_state(TransactionStates.choosing_category_after_check)
-        
-        buttons = [
-            types.InlineKeyboardButton(text=cat, callback_data=f"checkcat_{cat}")
-            for cat in category_list
-        ]
-        keyboard = types.InlineKeyboardMarkup(
-            inline_keyboard=[buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-        )
-        
-        await edit_or_send(
-            bot,
-            callback.message,
-            text=f"Выберите правильную категорию для этого чека:",
-            parse_mode="Markdown",
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        logger.error(f"Ошибка в process_edit_category: {e}")
-        try:
-            await edit_or_send(
-                bot,
-                callback.message,
-                f"❌ **Ошибка при редактировании категории:** {e}",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            logger.error(f"Не удалось отправить сообщение об ошибке в process_edit_category: {e}")
-
-
-async def process_cancel_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-    """Отменяет обработку чека."""
-    await safe_answer(callback)
-    
-    # Сбрасываем состояние
-    await state.clear()
-    
-    try:
-        await edit_or_send(bot, callback.message, f"❌ {MSG.transaction_cancelled}", reply_markup=get_main_keyboard())
-    except Exception as e:
-         # Игнорируем ошибки при редактировании сообщения
-         logger.error(f"Не удалось отправить сообщение об отмене чека: {e}")
+            await message.answer(f"❌ **Ошибка при обработке фото:** {e}")
+        except:
+            pass  # Если не удалось отправить сообщение, не критично
 
 
 async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, transaction_service: TransactionService, current_user: Optional[dict] = None):
-    """Подтверждает и записывает транзакцию из чека после выбора категории вручную."""
+    """Подтверждает и записывает чек."""
     await safe_answer(callback)
     
     try:
@@ -399,6 +204,19 @@ async def process_confirm_check(callback: types.CallbackQuery, state: FSMContext
     except Exception as e:
         logger.error(f"Ошибка в process_confirm_check: {e}")
         await edit_or_send(bot, callback.message, f"❌ **Ошибка:** {e}")
+
+
+async def process_cancel_check(callback: types.CallbackQuery, state: FSMContext):
+    """Отменяет процесс подтверждения чека."""
+    await safe_answer(callback)
+    await state.clear()
+    await edit_or_send(
+        callback.bot,
+        callback.message,
+        "❌ **Ввод транзакции отменен.**",
+        parse_mode="Markdown",
+        reply_markup=get_main_keyboard()
+    )
 
 
 async def process_confirm_auto_check(callback: types.CallbackQuery, state: FSMContext, bot: Bot, transaction_service: TransactionService, current_user: Optional[dict] = None):
@@ -537,10 +355,8 @@ async def show_splitting_ui(callback: types.CallbackQuery, state: FSMContext):
     total_left = sum(items_raw[i]['sum'] for i in remaining_indices)
     current_sum = sum(items_raw[i]['sum'] for i in session['current_selection'])
     
-    text = (f"✂️ **Разделение чека**\n"
-            f"Всего осталось: **{total_left:.2f}** руб.\n"
-            f"Выбрано сейчас: **{current_sum:.2f}** руб.\n\n"
-            f"👇 Отметьте товары для **Группы {len(session['completed_groups']) + 1}**:")
+    next_group_number = len(session['completed_groups']) + 1
+    text = MSG.split_receipt_info.format(total_left=total_left, current_sum=current_sum, next_group_number=next_group_number)
             
     await edit_or_send(callback.bot, callback.message, text, reply_markup=keyboard, parse_mode="Markdown")
 
@@ -598,9 +414,8 @@ async def confirm_split_group_items(callback: types.CallbackQuery, state: FSMCon
     
     current_sum = sum(session['original_items'][i]['sum'] for i in session['current_selection'])
     
-    text = (f"📂 **Группа {len(session['completed_groups']) + 1}** сформирована.\n"
-            f"Сумма: **{current_sum:.2f}** руб.\n"
-            f"Выберите категорию:")
+    next_group_number = len(session['completed_groups']) + 1
+    text = MSG.group_formed_select_category.format(current_sum=current_sum, next_group_number=next_group_number)
             
     await edit_or_send(callback.bot, callback.message, text, reply_markup=keyboard, parse_mode="Markdown")
     await state.set_state(TransactionStates.splitting_choose_category)

@@ -10,4 +10,3 @@ class User(BaseModel):
     telegram_id: int
     username: Optional[str] = None
     role: str = "user"  # 'admin' или 'user'
-    monthly_limit: float = 0.0

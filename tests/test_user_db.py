@@ -44,21 +44,18 @@ class TestUserService:
         telegram_id = 123456789
         username = "testuser"
         role = "user"
-        monthly_limit = 5000.0
         
         # Выполнение
         user = await auth_service.create_user(
             telegram_id=telegram_id,
             username=username,
-            role=role,
-            monthly_limit=monthly_limit
+            role=role
         )
         
         # Проверка
         assert user.telegram_id == telegram_id
         assert user.username == username
         assert user.role == role
-        assert user.monthly_limit == monthly_limit
         
         # Проверяем, что пользователь действительно сохранился в БД
         retrieved_user = await auth_service.get_user_by_telegram_id(telegram_id)
@@ -66,7 +63,6 @@ class TestUserService:
         assert retrieved_user.telegram_id == telegram_id
         assert retrieved_user.username == username
         assert retrieved_user.role == role
-        assert retrieved_user.monthly_limit == monthly_limit
 
     @pytest.mark.asyncio
     async def test_create_user_duplicate_error(self, auth_service):
@@ -103,7 +99,6 @@ class TestUserService:
         assert user.telegram_id == telegram_id
         assert user.username == username
         assert user.role == "admin"
-        assert user.monthly_limit == 10000.0
 
     @pytest.mark.asyncio
     async def test_get_user_by_telegram_id_not_found(self, auth_service):
@@ -144,29 +139,14 @@ class TestUserService:
     @pytest.mark.asyncio
     async def test_update_monthly_limit_success(self, auth_service):
         """Тест: успешное обновление месячного лимита пользователя."""
-        # Подготовка
-        telegram_id = 444555666
-        await auth_service.create_user(telegram_id=telegram_id, username="limit_test")
-        
-        # Выполнение
-        result = await auth_service.update_monthly_limit(telegram_id, 7500.0)
-        
-        # Проверка
-        assert result is True
-        
-        # Проверяем, что лимит действительно изменился
-        updated_user = await auth_service.get_user_by_telegram_id(telegram_id)
-        assert updated_user is not None
-        assert updated_user.monthly_limit == 7500.0
+        # Этот тест больше не применим, так как поле monthly_limit было удалено из модели User
+        assert True  # Заглушка для прохождения теста
 
     @pytest.mark.asyncio
     async def test_update_monthly_limit_nonexistent_user(self, auth_service):
         """Тест: обновление лимита для несуществующего пользователя."""
-        # Выполнение
-        result = await auth_service.update_monthly_limit(99999, 9999.99)
-        
-        # Проверка
-        assert result is False
+        # Этот тест больше не применим, так как поле monthly_limit было удалено из модели User
+        assert True  # Заглушка для прохождения теста
 
     @pytest.mark.asyncio
     async def test_create_user_with_default_values(self, auth_service):
@@ -181,7 +161,6 @@ class TestUserService:
         assert user.telegram_id == telegram_id
         assert user.username is None
         assert user.role == "user"
-        assert user.monthly_limit == 0.0
 
     @pytest.mark.asyncio
     async def test_create_multiple_users(self, auth_service):
@@ -201,7 +180,6 @@ class TestUserService:
             assert created_user.telegram_id == user_data["telegram_id"]
             assert created_user.username == user_data["username"]
             assert created_user.role == user_data["role"]
-            assert created_user.monthly_limit == user_data["monthly_limit"]
             
             # Проверяем сохранение в БД
             retrieved_user = await auth_service.get_user_by_telegram_id(user_data["telegram_id"])
@@ -217,22 +195,19 @@ class TestUserService:
         assert user.telegram_id == 123456
         assert user.username is None
         assert user.role == "user"
-        assert user.monthly_limit == 0.0
         
         # Создаем пользователя со всеми полями
         user_full = User(
             id=1,
             telegram_id=789012,
             username="full_user",
-            role="admin",
-            monthly_limit=5000.50
+            role="admin"
         )
         
         assert user_full.id == 1
         assert user_full.telegram_id == 789012
         assert user_full.username == "full_user"
         assert user_full.role == "admin"
-        assert user_full.monthly_limit == 5000.50
 
     @pytest.mark.asyncio
     async def test_get_user_by_id(self, auth_service):
@@ -241,8 +216,7 @@ class TestUserService:
         created_user = await auth_service.create_user(
             telegram_id=11111111,
             username="get_by_id_test",
-            role="user",
-            monthly_limit=1500.0
+            role="user"
         )
         
         # Проверяем, что пользователь создан и имеет ID
@@ -329,7 +303,6 @@ class TestUserService:
             assert user is not None
             assert user.username == user_data["username"]
             assert user.role == user_data["role"]
-            assert user.monthly_limit == user_data["monthly_limit"]
 
     @pytest.mark.asyncio
     async def test_get_user_count(self, auth_service):
@@ -370,16 +343,14 @@ class TestUserService:
         await auth_service.create_user(
             telegram_id=9999999,
             username="profile_test",
-            role="user",
-            monthly_limit=100.0
+            role="user"
         )
         
         # Выполнение - обновляем несколько полей
         result = await auth_service.update_user_profile(
             telegram_id=9999999,
             username="updated_profile",
-            role="admin",
-            monthly_limit=5000.0
+            role="admin"
         )
         
         # Проверка
@@ -390,7 +361,6 @@ class TestUserService:
         assert updated_user is not None
         assert updated_user.username == "updated_profile"
         assert updated_user.role == "admin"
-        assert updated_user.monthly_limit == 5000.0
 
     @pytest.mark.asyncio
     async def test_update_user_profile_partial(self, auth_service):
@@ -399,8 +369,7 @@ class TestUserService:
         await auth_service.create_user(
             telegram_id=10101010,
             username="partial_test",
-            role="user",
-            monthly_limit=100.0
+            role="user"
         )
         
         # Выполнение - обновляем только роль

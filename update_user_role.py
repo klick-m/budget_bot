@@ -39,8 +39,7 @@ async def update_user_role_in_db(telegram_id: int, new_role: str):
                 print(f"   Telegram ID: {user.telegram_id}")
                 print(f"   Username: {user.username}")
                 print(f"   Роль: {user.role}")
-                print(f"   Monthly limit: {user.monthly_limit}")
-        else:
+            else:
             print(f"❌ Пользователь с Telegram ID {telegram_id} не найден в базе данных")
             return False
             

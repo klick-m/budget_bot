@@ -51,8 +51,7 @@ async def command_start_handler(message: types.Message, state: FSMContext, curre
     keyboard = get_main_keyboard(is_admin=is_admin)
     
     await message.answer(
-        f"Привет, **{message.from_user.full_name}**! 👋\n"
-        "Выберите действие на клавиатуре ниже, или просто отправьте фото чека с QR-кодом для быстрого добавления.",
+        MSG.welcome_with_name.format(full_name=message.from_user.full_name) + "\nВыберите действие на клавиатуре ниже, или просто отправьте фото чека с QR-кодом для быстрого добавления.",
         parse_mode="Markdown",
         reply_markup=keyboard
     )
@@ -122,11 +121,11 @@ async def undo_command_handler(message: types.Message, current_user: Optional[di
     transactions = await get_latest_transactions(user_id=user_id, limit=3, offset=0)
     
     if not transactions:
-        await message.answer("📋 У вас пока нет транзакций для отмены.")
+        await message.answer(MSG.no_transactions_to_undo)
         return
 
     # Формируем сообщение с транзакциями
-    undo_text = "🗑 *Выберите транзакцию для удаления:*\n\n"
+    undo_text = MSG.select_transaction_to_undo
     for i, transaction in enumerate(transactions, 1):
         # Обрезаем комментарий до 20 символов, если он длиннее
         comment = transaction['comment'] if transaction['comment'] else 'Нет'
@@ -255,7 +254,7 @@ async def close_undo_handler(callback: types.CallbackQuery):
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                "🗑 Меню отмены транзакций закрыто.",
+                MSG.undo_menu_closed,
                 parse_mode="Markdown"
             )
         except Exception:
@@ -278,11 +277,11 @@ async def history_command_handler(message: types.Message, current_user: Optional
     transactions = await get_latest_transactions(user_id=user_id, limit=5, offset=0)
     
     if not transactions:
-        await message.answer("📋 У вас пока нет транзакций в истории.")
+        await message.answer(MSG.no_transactions_in_history)
         return
 
     # Формируем сообщение с транзакциями
-    history_text = "📜 *История ваших последних транзакций:*\n\n"
+    history_text = MSG.history_last_transactions_header
     for i, transaction in enumerate(transactions, 1):
         # Обрезаем комментарий до 20 символов, если он длиннее
         comment = transaction['comment'] if transaction['comment'] else 'Нет'
@@ -336,7 +335,7 @@ async def history_callback_handler(callback: types.CallbackQuery, callback_data:
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                "📋 У вас пока нет транзакций в истории.",
+                MSG.no_transactions_in_history,
                 parse_mode="Markdown"
             )
         except Exception:
@@ -344,7 +343,7 @@ async def history_callback_handler(callback: types.CallbackQuery, callback_data:
         return
 
     # Формируем сообщение с транзакциями
-    history_text = "📜 *История ваших транзакций:*\n\n"
+    history_text = MSG.history_transactions_header
     for i, transaction in enumerate(transactions, 1):
         # Обрезаем комментарий до 20 символов, если он длиннее
         comment = transaction['comment'] if transaction['comment'] else 'Нет'
@@ -402,7 +401,7 @@ async def close_history_handler(callback: types.CallbackQuery):
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                "📜 *История транзакций закрыта.*",
+                MSG.history_closed,
                 parse_mode="Markdown"
             )
         except Exception:

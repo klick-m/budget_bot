@@ -26,7 +26,7 @@ class AuthService:
         return await self.user_repo.get_user_by_id(user_id)
 
     async def create_user(self, telegram_id: int, username: Optional[str] = None,
-                         role: str = "user", monthly_limit: float = 0.0) -> User:
+                         role: str = "user") -> User:
         """
         Создать нового пользователя
         """
@@ -39,8 +39,7 @@ class AuthService:
         user_data = {
             'telegram_id': telegram_id,
             'username': username,
-            'role': role,
-            'monthly_limit': monthly_limit
+            'role': role
         }
         
         # Создаем пользователя через репозиторий
@@ -70,10 +69,7 @@ class AuthService:
         """
         Обновить месячный лимит пользователя
         """
-        user = await self.get_user_by_telegram_id(telegram_id)
-        if user:
-            fields = {'monthly_limit': monthly_limit}
-            return await self.user_repo.update_user_fields(user.id, fields)
+        # Поле monthly_limit больше не существует в модели User
         return False
 
     async def get_all_users(self) -> list[User]:
@@ -100,7 +96,7 @@ class AuthService:
         return False
 
     async def update_user_profile(self, telegram_id: int, username: Optional[str] = None,
-                                role: Optional[str] = None, monthly_limit: Optional[float] = None) -> bool:
+                                role: Optional[str] = None) -> bool:
         """
         Обновить профиль пользователя (несколько полей за раз)
         """
@@ -109,4 +105,4 @@ class AuthService:
             return False
 
         # Обновляем пользователя через репозиторий
-        return await self.user_repo.update_user_profile(user.id, username, role, monthly_limit)
+        return await self.user_repo.update_user_profile(user.id, username, role)

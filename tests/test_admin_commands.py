@@ -282,8 +282,8 @@ class TestAdminCommands:
         # Подготовка
         from models.user import User
         mock_users = [
-            User(id=1, telegram_id=123456789, username="admin", role="admin", monthly_limit=10000.0),
-            User(id=2, telegram_id=987654321, username="user", role="user", monthly_limit=5000.0)
+            User(id=1, telegram_id=123456789, username="admin", role="admin"),
+            User(id=2, telegram_id=987654321, username="user", role="user")
         ]
         mock_auth_service.get_all_users.return_value = mock_users
 

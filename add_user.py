@@ -10,7 +10,7 @@ from services.repository import TransactionRepository
 from services.auth_service import AuthService
 
 
-async def add_user_to_db(telegram_id: int, username: str = None, role: str = "user", monthly_limit: float = 0.0):
+async def add_user_to_db(telegram_id: int, username: str = None, role: str = "user"):
     """
     Добавляет пользователя в таблицу users базы данных
     """
@@ -18,7 +18,6 @@ async def add_user_to_db(telegram_id: int, username: str = None, role: str = "us
     print(f"Telegram ID: {telegram_id}")
     print(f"Username: {username}")
     print(f"Role: {role}")
-    print(f"Monthly limit: {monthly_limit}")
     
     # Создаем репозиторий и инициализируем базу данных
     repo = TransactionRepository()
@@ -32,8 +31,7 @@ async def add_user_to_db(telegram_id: int, username: str = None, role: str = "us
         user = await auth_service.create_user(
             telegram_id=telegram_id,
             username=username,
-            role=role,
-            monthly_limit=monthly_limit
+            role=role
         )
         
         print(f"✅ Пользователь успешно добавлен:")
@@ -41,7 +39,6 @@ async def add_user_to_db(telegram_id: int, username: str = None, role: str = "us
         print(f"   Telegram ID: {user.telegram_id}")
         print(f"   Username: {user.username}")
         print(f"   Role: {user.role}")
-        print(f"   Monthly limit: {user.monthly_limit}")
         
         return True
         
@@ -74,13 +71,15 @@ async def check_user_exists(telegram_id: int):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Использование: python add_user.py <telegram_id> [username]")
+        print("Использование: python add_user.py <telegram_id> [username] [role]")
         print("Пример: python add_user.py 123456789 myusername")
+        print("Пример: python add_user.py 123456789 myusername admin")
         print("Пример: python add_user.py 123456789")
         sys.exit(1)
     
     telegram_id = int(sys.argv[1])
     username = sys.argv[2] if len(sys.argv) > 2 else None
+    role = sys.argv[3] if len(sys.argv) > 3 else "user"
     
     print("=" * 60)
     print("СКРИПТ ДОБАВЛЕНИЯ ПОЛЬЗОВАТЕЛЯ В БАЗУ ДАННЫХ BUDGET_BOT")
@@ -95,7 +94,7 @@ if __name__ == "__main__":
         sys.exit(0)
     
     # Добавляем пользователя
-    success = asyncio.run(add_user_to_db(telegram_id, username))
+    success = asyncio.run(add_user_to_db(telegram_id, username, role))
     
     print("=" * 60)
     if success:

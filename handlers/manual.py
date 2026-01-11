@@ -103,7 +103,7 @@ async def process_type_selection(message: types.Message, state: FSMContext):
         transaction_type = "Расход"
     
     if not transaction_type:
-        await message.answer("❌ Пожалуйста, выберите тип транзакции с помощью клавиатуры.")
+        await message.answer(MSG.please_select_transaction_type)
         return
 
     # Сохраняем тип в FSM
@@ -147,7 +147,7 @@ async def process_category_selection(message: types.Message, state: FSMContext):
     # Проверяем, что выбранная категория соответствует типу
     valid_categories = CATEGORY_STORAGE.income if transaction_type == "Доход" else CATEGORY_STORAGE.expense
     if user_input_raw not in valid_categories:
-        await message.answer(f"❌ Пожалуйста, выберите категорию из списка для типа **{transaction_type}**.")
+        await message.answer(MSG.please_select_category_for_type.format(transaction_type=transaction_type))
         return
 
     # Сохраняем категорию в FSM
@@ -169,7 +169,7 @@ async def process_amount_input(message: types.Message, state: FSMContext):
     
     if user_input in ["❌ отмена", "отмена", "cancel"]:
         await state.clear()
-        await message.answer("❌ **Ввод транзакции отменен.**", reply_markup=get_main_keyboard())
+        await message.answer(MSG.transaction_cancelled, reply_markup=get_main_keyboard())
         return
 
     try:
@@ -177,7 +177,7 @@ async def process_amount_input(message: types.Message, state: FSMContext):
         if amount <= 0:
             raise ValueError("Сумма должна быть положительной")
     except ValueError:
-        await message.answer("❌ Пожалуйста, введите корректную сумму (например, 100.50 или 100).")
+        await message.answer(MSG.please_enter_valid_amount)
         return
 
     # Сохраняем сумму в FSM
@@ -233,18 +233,17 @@ async def process_comment_input(message: types.Message, state: FSMContext, curre
     await state.update_data(transaction_data=transaction_data)
     
     # Показываем сводку и спрашиваем подтверждение
-    summary = (f"📋 **Новая транзакция**\n\n"
-               f"Тип: **{transaction_data.type}**\n"
-               f"Категория: **{transaction_data.category}**\n"
-               f"Сумма: **{transaction_data.amount}** руб.\n"
-               f"Комментарий: *{transaction_data.comment or 'Не указан'}*\n\n"
-               f"✅ Подтвердить и записать?")
+    comment_display = getattr(transaction_data, 'comment', '') or 'Не указан'
+    summary = MSG.new_transaction_summary.format(transaction_data=transaction_data, comment_display=comment_display)
     
     keyboard = types.InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 types.InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_manual_transaction"),
                 types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_manual_transaction")
+            ],
+            [
+                types.InlineKeyboardButton(text="🏷️ Изменить категорию", callback_data="edit_category_manual_transaction")
             ]
         ]
     )
@@ -286,10 +285,7 @@ async def confirm_manual_transaction(callback: types.CallbackQuery, state: FSMCo
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                f"✅ **Транзакция сохранена!**\n\n"
-                f"Сумма: **{transaction_data.amount}** руб.\n"
-                f"Категория: **{transaction_data.category}**\n"
-                f"Комментарий: *{transaction_data.comment or 'Не указан'}*",
+                MSG.transaction_saved.format(amount=transaction_data.amount, category=transaction_data.category, comment=getattr(transaction_data, 'comment', '') or 'Не указан'),
                 parse_mode="Markdown",
                 reply_markup=get_main_keyboard()
             )
@@ -299,7 +295,7 @@ async def confirm_manual_transaction(callback: types.CallbackQuery, state: FSMCo
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                f"❌ **Ошибка при сохранении:** {e}",
+                MSG.error_saving_transaction_manual.format(e=e),
                 parse_mode="Markdown"
             )
         except Exception as e:
@@ -307,7 +303,7 @@ async def confirm_manual_transaction(callback: types.CallbackQuery, state: FSMCo
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                f"❌ **Ошибка при сохранении транзакции:** {e}",
+                MSG.error_saving_transaction_full.format(e=e),
                 parse_mode="Markdown"
             )
     except Exception as e:
@@ -316,7 +312,7 @@ async def confirm_manual_transaction(callback: types.CallbackQuery, state: FSMCo
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                f"❌ **Критическая ошибка:** {e}",
+                MSG.unexpected_error.format(error=e),
                 parse_mode="Markdown"
             )
         except Exception:
@@ -334,10 +330,186 @@ async def cancel_manual_transaction(callback: types.CallbackQuery, state: FSMCon
     await edit_or_send(
         callback.bot,
         callback.message,
-        "❌ **Ввод транзакции отменен.**",
+        MSG.transaction_cancelled,
         parse_mode="Markdown",
         reply_markup=get_main_keyboard()
     )
+
+
+async def edit_category_manual_transaction(callback: types.CallbackQuery, state: FSMContext):
+    """Позволяет изменить категорию во время подтверждения транзакции."""
+    
+    await safe_answer(callback)
+    
+    # Получаем текущий тип транзакции из FSM
+    data = await state.get_data()
+    transaction_data = data.get('transaction_data')
+    
+    if not transaction_data:
+        await edit_or_send(
+            callback.bot,
+            callback.message,
+            "❌ **Ошибка!** Данные транзакции не найдены.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    transaction_type = transaction_data.type
+    
+    # Проверяем, что тип транзакции не None
+    if not transaction_type:
+        await edit_or_send(
+            callback.bot,
+            callback.message,
+            "❌ **Ошибка!** Не удалось определить тип транзакции.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Создаем клавиатуру с категориями
+    from utils.keyboards import get_categories_keyboard
+    keyboard = get_categories_keyboard(transaction_type)
+    
+    await edit_or_send(
+        callback.bot,
+        callback.message,
+        MSG.select_category_prompt,
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+    
+    # Переходим в состояние ожидания выбора категории
+    await state.set_state(TransactionStates.waiting_for_category_selection)
+
+
+async def process_category_selection_manual_edit(message: types.Message, state: FSMContext):
+    """Обрабатывает выбор новой категории во время подтверждения транзакции."""
+    
+    user_input_raw = message.text.strip()
+    user_input = user_input_raw.lower()
+    
+    if user_input in [MSG.btn_cancel.lower(), "отмена", "cancel"]:
+        await state.clear()
+        await message.answer(MSG.transaction_cancelled, reply_markup=get_main_keyboard())
+        return
+
+    # Получаем тип транзакции из FSM
+    data = await state.get_data()
+    transaction_data = data.get('transaction_data')
+    
+    if not transaction_data:
+        await message.answer("❌ **Ошибка!** Данные транзакции не найдены.")
+        return
+
+    transaction_type = transaction_data.type
+    
+    # Проверяем, что тип транзакции не None
+    if not transaction_type:
+        await message.answer("❌ **Ошибка!** Не удалось определить тип транзакции.")
+        return
+    
+    # Проверяем, что выбранная категория соответствует типу
+    valid_categories = CATEGORY_STORAGE.income if transaction_type == "Доход" else CATEGORY_STORAGE.expense
+    if user_input_raw not in valid_categories:
+        await message.answer(MSG.please_select_category_for_type.format(transaction_type=transaction_type))
+        return
+
+    # Обновляем категорию в данных FSM
+    transaction_data.category = user_input_raw
+    await state.update_data(transaction_data=transaction_data)
+    
+    # Возвращаемся к подтверждению транзакции с обновленной информацией
+    comment_display = getattr(transaction_data, 'comment', '') or 'Не указан'
+    summary = MSG.new_transaction_summary.format(transaction_data=transaction_data, comment_display=comment_display)
+    
+    keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_manual_transaction"),
+                types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_manual_transaction")
+            ],
+            [
+                types.InlineKeyboardButton(text="🏷️ Изменить категорию", callback_data="edit_category_manual_transaction")
+            ]
+        ]
+    )
+    
+    await message.answer(summary, reply_markup=keyboard, parse_mode="Markdown")
+    await state.set_state(TransactionStates.waiting_for_confirmation)
+
+
+async def process_category_selection_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор новой категории через callback (когда пользователь нажимает на кнопку с категорией)."""
+    
+    await safe_answer(callback)
+    
+    # Извлекаем название категории из callback.data
+    category = callback.data.replace("cat_", "")
+    
+    # Получаем тип транзакции из FSM
+    data = await state.get_data()
+    transaction_data = data.get('transaction_data')
+    
+    if not transaction_data:
+        await edit_or_send(
+            callback.bot,
+            callback.message,
+            "❌ **Ошибка!** Данные транзакции не найдены.",
+            parse_mode="Markdown"
+        )
+        return
+
+    transaction_type = transaction_data.type
+    
+    # Проверяем, что тип транзакции не None
+    if not transaction_type:
+        await edit_or_send(
+            callback.bot,
+            callback.message,
+            "❌ **Ошибка!** Не удалось определить тип транзакции.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Проверяем, что выбранная категория соответствует типу
+    valid_categories = CATEGORY_STORAGE.income if transaction_type == "Доход" else CATEGORY_STORAGE.expense
+    if category not in valid_categories:
+        await edit_or_send(
+            callback.bot,
+            callback.message,
+            MSG.please_select_category_for_type.format(transaction_type=transaction_type),
+            parse_mode="Markdown"
+        )
+        return
+
+    # Обновляем категорию в данных FSM
+    transaction_data.category = category
+    await state.update_data(transaction_data=transaction_data)
+    
+    # Возвращаемся к подтверждению транзакции с обновленной информацией
+    comment_display = getattr(transaction_data, 'comment', '') or 'Не указан'
+    summary = MSG.new_transaction_summary.format(transaction_data=transaction_data, comment_display=comment_display)
+    
+    keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_manual_transaction"),
+                types.InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_manual_transaction")
+            ],
+            [
+                types.InlineKeyboardButton(text="🏷️ Изменить категорию", callback_data="edit_category_manual_transaction")
+            ]
+        ]
+    )
+    
+    await edit_or_send(
+        callback.bot,
+        callback.message,
+        summary,
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+    await state.set_state(TransactionStates.waiting_for_confirmation)
 
 
 # --- РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ---
@@ -353,10 +525,16 @@ def register_manual_handlers(dp: Router):
     dp.message.register(process_category_selection, TransactionStates.choosing_category)
     dp.message.register(process_amount_input, TransactionStates.entering_amount)
     dp.message.register(process_comment_input, TransactionStates.entering_comment)
+    # Добавляем обработчик для изменения категории во время подтверждения
+    dp.message.register(process_category_selection_manual_edit, TransactionStates.waiting_for_category_selection)
     
     # Callback-хендлеры для подтверждения
     dp.callback_query.register(confirm_manual_transaction, F.data == "confirm_manual_transaction", TransactionStates.waiting_for_confirmation)
     dp.callback_query.register(cancel_manual_transaction, F.data == "cancel_manual_transaction", TransactionStates.waiting_for_confirmation)
+    # Добавляем обработчик для изменения категории
+    dp.callback_query.register(edit_category_manual_transaction, F.data == "edit_category_manual_transaction", TransactionStates.waiting_for_confirmation)
+    # Добавляем обработчик для выбора категории через callback
+    dp.callback_query.register(process_category_selection_callback, F.data.startswith("cat_"), TransactionStates.waiting_for_category_selection)
 
 
 def register_draft_handlers(dp: Router):
@@ -382,7 +560,7 @@ async def process_edit_type(callback: types.CallbackQuery, state: FSMContext):
     await edit_or_send(
         callback.bot,
         callback.message,
-        "Выберите тип транзакции:",
+        MSG.select_transaction_type_prompt,
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -404,7 +582,7 @@ async def process_edit_category_draft(callback: types.CallbackQuery, state: FSMC
     await edit_or_send(
         callback.bot,
         callback.message,
-        "Выберите категорию:",
+        MSG.select_category_prompt,
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -419,7 +597,7 @@ async def process_edit_amount(callback: types.CallbackQuery, state: FSMContext):
     await edit_or_send(
         callback.bot,
         callback.message,
-        "Введите сумму транзакции:",
+        MSG.enter_transaction_amount,
         parse_mode="Markdown"
     )
 
@@ -433,7 +611,7 @@ async def process_edit_comment(callback: types.CallbackQuery, state: FSMContext)
     await edit_or_send(
         callback.bot,
         callback.message,
-        "Введите комментарий к транзакции:",
+        MSG.enter_transaction_comment,
         parse_mode="Markdown"
     )
 
@@ -456,7 +634,7 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transa
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                "❌ Не все обязательные поля заполнены! Необходимо указать тип, категорию и сумму.",
+                MSG.not_all_fields_filled,
                 parse_mode="Markdown"
             )
             return
@@ -467,7 +645,7 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transa
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                "❌ Ошибка: невозможно получить информацию о пользователе.",
+                MSG.error_getting_user_info,
                 parse_mode="Markdown"
             )
             return
@@ -496,10 +674,7 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transa
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                f"✅ **Транзакция сохранена!**\n\n"
-                f"Сумма: **{transaction_data.amount}** руб.\n"
-                f"Категория: **{transaction_data.category}**\n"
-                f"Комментарий: *{transaction_data.comment or 'Не указан'}*",
+                MSG.transaction_saved.format(amount=transaction_data.amount, category=transaction_data.category, comment=getattr(transaction_data, 'comment', '') or 'Не указан'),
                 parse_mode="Markdown",
                 reply_markup=get_main_keyboard()
             )
@@ -509,7 +684,7 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transa
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                f"❌ **Ошибка при сохранении:** {e}",
+                MSG.error_saving_transaction_manual.format(e=e),
                 parse_mode="Markdown"
             )
         except Exception as e:
@@ -517,7 +692,7 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transa
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                f"❌ **Ошибка при сохранении транзакции:** {e}",
+                MSG.error_saving_transaction_full.format(e=e),
                 parse_mode="Markdown"
             )
     except Exception as e:
@@ -526,7 +701,7 @@ async def confirm_draft(callback: types.CallbackQuery, state: FSMContext, transa
             await edit_or_send(
                 callback.bot,
                 callback.message,
-                f"❌ **Критическая ошибка:** {e}",
+                MSG.unexpected_error.format(error=e),
                 parse_mode="Markdown"
             )
         except Exception:
@@ -545,7 +720,7 @@ async def cancel_draft(callback: types.CallbackQuery, state: FSMContext):
     await edit_or_send(
         callback.bot,
         callback.message,
-        "❌ **Черновик отменен.**",
+        MSG.draft_cancelled,
         parse_mode="Markdown",
         reply_markup=get_main_keyboard()
     )
